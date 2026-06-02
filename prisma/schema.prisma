@@ -1,0 +1,140 @@
+// Wiftil - Role-Based Auth Schema
+// Prisma ORM + PostgreSQL (Neon)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum Role {
+  BOSS
+  MANAGER
+  LEADER
+  EMPLOYEE
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum LeaveType {
+  ANNUAL
+  SICK
+  UNPAID
+  EMERGENCY
+  MATERNITY
+  PATERNITY
+}
+
+enum TokenType {
+  REFRESH
+  EMAIL_VERIFY
+  PASSWORD_RESET
+}
+
+// ─────────────────────────────────────────────
+// MODELS
+// ─────────────────────────────────────────────
+
+model User {
+  id                String    @id @default(uuid())
+  email             String    @unique
+  password          String
+  firstName         String
+  lastName          String
+  role              Role      @default(EMPLOYEE)
+  isActive          Boolean   @default(true)
+  isEmailVerified   Boolean   @default(false)
+  profilePicture    String?
+  phone             String?
+  department        String?
+  jobTitle          String?
+  managerId         String?   // self-referencing: who manages this user
+
+  // Relations
+  manager           User?     @relation("UserManager", fields: [managerId], references: [id])
+  subordinates      User[]    @relation("UserManager")
+  tokens            Token[]
+  leaveRequests     LeaveRequest[] @relation("LeaveRequester")
+  reviewedLeaves    LeaveRequest[] @relation("LeaveReviewer")
+  auditLogs         AuditLog[]
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime? // soft delete
+
+  @@map("users")
+}
+
+model Token {
+  id          String    @id @default(uuid())
+  userId      String
+  token       String    @unique
+  type        TokenType
+  expiresAt   DateTime
+  isRevoked   Boolean   @default(false)
+  deviceInfo  String?   // user-agent / device
+  ipAddress   String?
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([token])
+  @@map("tokens")
+}
+
+model LeaveRequest {
+  id            String      @id @default(uuid())
+  requesterId   String
+  reviewerId    String?
+  leaveType     LeaveType
+  status        LeaveStatus @default(PENDING)
+  startDate     DateTime
+  endDate       DateTime
+  totalDays     Int
+  reason        String
+  reviewComment String?
+  reviewedAt    DateTime?
+
+  requester     User        @relation("LeaveRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  reviewer      User?       @relation("LeaveReviewer", fields: [reviewerId], references: [id])
+
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([requesterId])
+  @@index([status])
+  @@map("leave_requests")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  action      String
+  entity      String
+  entityId    String?
+  oldValues   Json?
+  newValues   Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
