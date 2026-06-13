@@ -4,6 +4,8 @@ const bcrypt = require('bcryptjs');
 const { db }            = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
 const { HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
+const userCache         = require('../utils/userCache');
+
 
 const ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12');
 
@@ -195,6 +197,8 @@ async function updateUser({ id, requestingUser, data, req }) {
   allowedFields.forEach((f) => { if (data[f] !== undefined) updateData[f] = data[f]; });
 
   const updated = await db.user.update({ where: { id }, data: updateData, select: USER_SELECT });
+  userCache.invalidateUser(id); // evict stale cache
+
 
   await writeAuditLog({
     performedBy:   requestingUser,
@@ -264,6 +268,8 @@ async function updateUserRole({ id, requestingUser, roleId: rawRole, req }) {
     data:  { roleId: targetRole.id },
     select: USER_SELECT,
   });
+  userCache.invalidateUser(id); // role changed — evict stale cache
+
 
   await writeAuditLog({
     performedBy:    requestingUser,
@@ -313,6 +319,8 @@ async function toggleUserStatus({ id, requestingUser, isActive, req }) {
   }
 
   const updated = await db.user.update({ where: { id }, data: { isActive }, select: USER_SELECT });
+  userCache.invalidateUser(id); // status changed — evict stale cache
+
 
   await writeAuditLog({
     performedBy:    requestingUser,
@@ -356,6 +364,8 @@ async function deleteUser({ id, requestingUser, req }) {
   }
 
   await db.user.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } });
+  userCache.invalidateUser(id); // deleted — evict stale cache
+
 
   await writeAuditLog({
     performedBy:    requestingUser,

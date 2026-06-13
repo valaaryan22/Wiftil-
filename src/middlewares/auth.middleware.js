@@ -4,11 +4,13 @@ const { verifyAccessToken } = require('../utils/jwt');
 const { db }                = require('../database/client');
 const { errorResponse }     = require('../utils/response');
 const { HTTP_STATUS }       = require('../constants');
+const userCache             = require('../utils/userCache');
 
 /**
  * authenticate — verifies the Bearer token and attaches user to req.user
- * req.user will include: id, email, firstName, lastName,
- *   roleId, roleName, roleLevel (accessLevel), isActive, etc.
+ *
+ * Performance: Uses a 60-second in-memory cache keyed by userId to avoid
+ * a DB round-trip on every request. Cache is invalidated on role/status changes.
  */
 async function authenticate(req, res, next) {
   try {
@@ -34,7 +36,14 @@ async function authenticate(req, res, next) {
       return errorResponse(res, { statusCode: HTTP_STATUS.UNAUTHORIZED, message });
     }
 
-    // Fetch user from DB — include dynamic role info
+    // ── Cache hit — skip DB entirely ──────────────────────────────────────────
+    const cached = userCache.getUser(decoded.sub);
+    if (cached) {
+      req.user = cached;
+      return next();
+    }
+
+    // ── Cache miss — fetch from DB and cache result ───────────────────────────
     const user = await db.user.findUnique({
       where: { id: decoded.sub },
       select: {
@@ -75,14 +84,18 @@ async function authenticate(req, res, next) {
       });
     }
 
-    // Flatten for convenience throughout the app
-    req.user = {
+    // Flatten role fields for convenience
+    const enrichedUser = {
       ...user,
       roleName:  user.role.name,
       roleLevel: user.role.accessLevel,
       roleColor: user.role.color,
     };
 
+    // Cache for 60 seconds
+    userCache.setUser(decoded.sub, enrichedUser);
+
+    req.user = enrichedUser;
     next();
   } catch (error) {
     next(error);

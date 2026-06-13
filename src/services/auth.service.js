@@ -5,6 +5,8 @@ const { db } = require('../database/client');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken, getRefreshTokenExpiry } = require('../utils/jwt');
 const { writeAuditLog } = require('../utils/auditLog');
 const { TOKEN_TYPES, HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
+const userCache = require('../utils/userCache');
+
 
 const ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12');
 
@@ -139,7 +141,7 @@ async function refreshTokens({ refreshToken, req }) {
   // Verify token exists in DB and is not revoked
   const storedToken = await db.token.findUnique({
     where: { token: refreshToken },
-    include: { user: { select: { id: true, email: true, role: true, isActive: true, deletedAt: true } } },
+    include: { user: { select: { id: true, email: true, isActive: true, deletedAt: true, role: { select: { name: true, accessLevel: true } } } } },
   });
 
   if (!storedToken || storedToken.isRevoked || storedToken.expiresAt < new Date()) {
@@ -159,7 +161,7 @@ async function refreshTokens({ refreshToken, req }) {
   // Rotate: revoke old, issue new
   await db.token.update({ where: { id: storedToken.id }, data: { isRevoked: true } });
 
-  const tokenPayload = { sub: user.id, email: user.email, role: user.role };
+  const tokenPayload = { sub: user.id, email: user.email, roleName: user.role.name, roleLevel: user.role.accessLevel };
   const newAccessToken  = generateAccessToken(tokenPayload);
   const newRefreshToken = generateRefreshToken(tokenPayload);
 
@@ -239,6 +241,8 @@ async function changePassword({ userId, currentPassword, newPassword }) {
 
   const hashed = await bcrypt.hash(newPassword, ROUNDS);
   await db.user.update({ where: { id: userId }, data: { password: hashed } });
+  userCache.invalidateUser(userId); // force fresh fetch after password change
+
 
   // Revoke all refresh tokens (force re-login everywhere)
   await db.token.updateMany({
