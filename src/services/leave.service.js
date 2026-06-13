@@ -1,8 +1,8 @@
 'use strict';
 
-const { db } = require('../database/client');
-const { ROLE_WEIGHT, LEAVE_APPROVAL_MATRIX, HTTP_STATUS } = require('../constants');
+const { db }           = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
+const { HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
 
 /**
  * Calculate working days between two dates (excludes weekends)
@@ -22,15 +22,15 @@ function calcWorkingDays(startDate, endDate) {
 /**
  * Create leave request (any authenticated user)
  */
-async function createLeaveRequest({ requesterId, leaveType, startDate, endDate, reason }) {
+async function createLeaveRequest({ requestingUser, leaveType, startDate, endDate, reason, req }) {
+  const requesterId = requestingUser.id;
+
   // Check for overlapping pending/approved leave
   const overlap = await db.leaveRequest.findFirst({
     where: {
       requesterId,
       status: { in: ['PENDING', 'APPROVED'] },
-      OR: [
-        { startDate: { lte: endDate }, endDate: { gte: startDate } },
-      ],
+      OR: [{ startDate: { lte: endDate }, endDate: { gte: startDate } }],
     },
   });
 
@@ -45,34 +45,58 @@ async function createLeaveRequest({ requesterId, leaveType, startDate, endDate, 
   const leave = await db.leaveRequest.create({
     data: { requesterId, leaveType, startDate, endDate, totalDays, reason },
     include: {
-      requester: { select: { id: true, firstName: true, lastName: true, email: true, role: true, department: true } },
+      requester: {
+        select: {
+          id: true, firstName: true, lastName: true, email: true, department: true,
+          role: { select: { name: true, displayName: true } },
+        },
+      },
     },
   });
 
-  await writeAuditLog({ userId: requesterId, action: 'LEAVE_REQUESTED', entity: 'LeaveRequest', entityId: leave.id });
+  await writeAuditLog({
+    performedBy:  requestingUser,
+    action:       AUDIT_ACTION.LEAVE_APPLIED,
+    category:     AUDIT_CATEGORY.LEAVE,
+    entity:       'LeaveRequest',
+    entityId:     leave.id,
+    targetUserId: requesterId,
+    targetUserName: `${requestingUser.firstName} ${requestingUser.lastName}`,
+    description:  `${requestingUser.firstName} ${requestingUser.lastName} applied for ${leaveType} leave (${totalDays} working days)`,
+    newValues:    { leaveType, startDate, endDate, totalDays, reason },
+    req,
+  });
 
   return leave;
 }
 
 /**
- * Get leave requests — scoped by role
+ * Get leave requests — scoped by role level
+ * Level 5 (BOSS): all
+ * Level 4 (MANAGER): their team
+ * Level 2–3 (LEADER/SUPERVISOR): direct reports with lower level
+ * Level 1 (EMPLOYEE): own only
  */
 async function getLeaveRequests({ requestingUser, page = 1, limit = 20, status, leaveType }) {
+  page  = parseInt(page);
+  limit = parseInt(limit);
   const where = {};
 
-  // Scope: employees see only their own; managers/leaders see their direct reports' leaves
-  if (requestingUser.role === 'EMPLOYEE') {
+  if (requestingUser.roleLevel === 1) {
     where.requesterId = requestingUser.id;
-  } else if (requestingUser.role === 'LEADER' || requestingUser.role === 'MANAGER') {
-    // Get IDs of all reportees
-    const approvableRoles = LEAVE_APPROVAL_MATRIX[requestingUser.role];
+  } else if (requestingUser.roleLevel < 5) {
+    // Show own + direct reports' leaves
     const reportees = await db.user.findMany({
-      where: { managerId: requestingUser.id, role: { in: approvableRoles }, deletedAt: null },
+      where: {
+        managerId: requestingUser.id,
+        role: { accessLevel: { lt: requestingUser.roleLevel } },
+        deletedAt: null,
+      },
       select: { id: true },
     });
     where.requesterId = { in: [requestingUser.id, ...reportees.map((r) => r.id)] };
   }
-  // BOSS sees all — no filter
+  // Level 5: no restriction
 
   if (status)    where.status    = status;
   if (leaveType) where.leaveType = leaveType;
@@ -82,8 +106,13 @@ async function getLeaveRequests({ requestingUser, page = 1, limit = 20, status, 
     db.leaveRequest.findMany({
       where,
       include: {
-        requester: { select: { id: true, firstName: true, lastName: true, email: true, role: true } },
-        reviewer:  { select: { id: true, firstName: true, lastName: true } },
+        requester: {
+          select: {
+            id: true, firstName: true, lastName: true, email: true,
+            role: { select: { name: true, displayName: true } },
+          },
+        },
+        reviewer: { select: { id: true, firstName: true, lastName: true } },
       },
       skip,
       take: limit,
@@ -99,6 +128,8 @@ async function getLeaveRequests({ requestingUser, page = 1, limit = 20, status, 
  * Get my own leave requests
  */
 async function getMyLeaves({ requesterId, page = 1, limit = 20 }) {
+  page  = parseInt(page);
+  limit = parseInt(limit);
   const skip = (page - 1) * limit;
   const [leaves, total] = await Promise.all([
     db.leaveRequest.findMany({
@@ -114,12 +145,20 @@ async function getMyLeaves({ requesterId, page = 1, limit = 20 }) {
 }
 
 /**
- * Review leave (approve / reject) — respects approval matrix
+ * Review leave (approve / reject) — reviewer must have higher level than requester
  */
-async function reviewLeaveRequest({ leaveId, reviewerId, status, reviewComment, requestingUser }) {
+async function reviewLeaveRequest({ leaveId, requestingUser, status, reviewComment, req }) {
   const leave = await db.leaveRequest.findUnique({
     where: { id: leaveId },
-    include: { requester: { select: { id: true, role: true, managerId: true } } },
+    include: {
+      requester: {
+        select: {
+          id: true, firstName: true, lastName: true,
+          role: { select: { accessLevel: true, name: true } },
+          managerId: true,
+        },
+      },
+    },
   });
 
   if (!leave) {
@@ -134,42 +173,42 @@ async function reviewLeaveRequest({ leaveId, reviewerId, status, reviewComment, 
     throw err;
   }
 
-  // Prevent self-review
-  if (leave.requesterId === reviewerId) {
+  if (leave.requesterId === requestingUser.id) {
     const err = new Error('Cannot review your own leave request');
     err.statusCode = HTTP_STATUS.FORBIDDEN;
     throw err;
   }
 
-  // Check if reviewer is allowed to approve this role's leaves
-  const approvableRoles = LEAVE_APPROVAL_MATRIX[requestingUser.role] || [];
-  if (!approvableRoles.includes(leave.requester.role)) {
-    const err = new Error('You are not authorized to review this leave request');
+  // Reviewer must have strictly higher access level than requester
+  if (requestingUser.roleLevel <= leave.requester.role.accessLevel) {
+    const err = new Error('You are not authorized to review this leave request (insufficient access level)');
     err.statusCode = HTTP_STATUS.FORBIDDEN;
     throw err;
   }
 
   const updated = await db.leaveRequest.update({
     where: { id: leaveId },
-    data: {
-      status,
-      reviewerId,
-      reviewComment,
-      reviewedAt: new Date(),
-    },
+    data: { status, reviewerId: requestingUser.id, reviewComment, reviewedAt: new Date() },
     include: {
       requester: { select: { id: true, firstName: true, lastName: true, email: true } },
       reviewer:  { select: { id: true, firstName: true, lastName: true } },
     },
   });
 
+  const action = status === 'APPROVED' ? AUDIT_ACTION.LEAVE_APPROVED : AUDIT_ACTION.LEAVE_REJECTED;
+
   await writeAuditLog({
-    userId: reviewerId,
-    action: `LEAVE_${status}`,
-    entity: 'LeaveRequest',
-    entityId: leaveId,
-    oldValues: { status: 'PENDING' },
-    newValues: { status, reviewComment },
+    performedBy:    requestingUser,
+    action,
+    category:       AUDIT_CATEGORY.LEAVE,
+    entity:         'LeaveRequest',
+    entityId:       leaveId,
+    targetUserId:   leave.requesterId,
+    targetUserName: `${leave.requester.firstName} ${leave.requester.lastName}`,
+    description:    `${status === 'APPROVED' ? 'Approved' : 'Rejected'} leave request from "${leave.requester.firstName} ${leave.requester.lastName}"${reviewComment ? `: "${reviewComment}"` : ''}`,
+    oldValues:      { status: 'PENDING' },
+    newValues:      { status, reviewComment },
+    req,
   });
 
   return updated;
@@ -178,10 +217,10 @@ async function reviewLeaveRequest({ leaveId, reviewerId, status, reviewComment, 
 /**
  * Cancel own pending leave
  */
-async function cancelLeaveRequest({ leaveId, requesterId }) {
+async function cancelLeaveRequest({ leaveId, requestingUser, req }) {
   const leave = await db.leaveRequest.findUnique({ where: { id: leaveId } });
 
-  if (!leave || leave.requesterId !== requesterId) {
+  if (!leave || leave.requesterId !== requestingUser.id) {
     const err = new Error('Leave request not found');
     err.statusCode = HTTP_STATUS.NOT_FOUND;
     throw err;
@@ -195,10 +234,20 @@ async function cancelLeaveRequest({ leaveId, requesterId }) {
 
   const updated = await db.leaveRequest.update({
     where: { id: leaveId },
-    data: { status: 'CANCELLED' },
+    data:  { status: 'CANCELLED' },
   });
 
-  await writeAuditLog({ userId: requesterId, action: 'LEAVE_CANCELLED', entity: 'LeaveRequest', entityId: leaveId });
+  await writeAuditLog({
+    performedBy:    requestingUser,
+    action:         AUDIT_ACTION.LEAVE_CANCELLED,
+    category:       AUDIT_CATEGORY.LEAVE,
+    entity:         'LeaveRequest',
+    entityId:       leaveId,
+    targetUserId:   requestingUser.id,
+    targetUserName: `${requestingUser.firstName} ${requestingUser.lastName}`,
+    description:    `${requestingUser.firstName} ${requestingUser.lastName} cancelled their leave request`,
+    req,
+  });
 
   return updated;
 }

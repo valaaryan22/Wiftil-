@@ -6,14 +6,11 @@ const { successResponse, paginatedResponse } = require('../utils/response');
 async function createLeave(req, res, next) {
   try {
     const leave = await leaveService.createLeaveRequest({
-      requesterId: req.user.id,
+      requestingUser: req.user,
       ...req.body,
+      req,
     });
-    return successResponse(res, {
-      statusCode: 201,
-      message: 'Leave request submitted',
-      data: { leave },
-    });
+    return successResponse(res, { statusCode: 201, message: 'Leave request submitted', data: { leave } });
   } catch (err) {
     next(err);
   }
@@ -44,11 +41,11 @@ async function getMyLeaves(req, res, next) {
 async function reviewLeave(req, res, next) {
   try {
     const leave = await leaveService.reviewLeaveRequest({
-      leaveId: req.params.id,
-      reviewerId: req.user.id,
+      leaveId:       req.params.id,
       requestingUser: req.user,
-      status: req.body.status,
+      status:        req.body.status,
       reviewComment: req.body.reviewComment,
+      req,
     });
     return successResponse(res, { message: `Leave ${req.body.status.toLowerCase()}`, data: { leave } });
   } catch (err) {
@@ -59,8 +56,9 @@ async function reviewLeave(req, res, next) {
 async function cancelLeave(req, res, next) {
   try {
     const leave = await leaveService.cancelLeaveRequest({
-      leaveId: req.params.id,
-      requesterId: req.user.id,
+      leaveId:       req.params.id,
+      requestingUser: req.user,
+      req,
     });
     return successResponse(res, { message: 'Leave request cancelled', data: { leave } });
   } catch (err) {

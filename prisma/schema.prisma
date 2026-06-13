@@ -1,4 +1,4 @@
-// Wiftil - Role-Based Auth Schema
+// Wiftil - Dynamic Role-Based Auth Schema
 // Prisma ORM + PostgreSQL (Neon)
 
 generator client {
@@ -12,13 +12,6 @@ datasource db {
 // ─────────────────────────────────────────────
 // ENUMS
 // ─────────────────────────────────────────────
-
-enum Role {
-  BOSS
-  MANAGER
-  LEADER
-  EMPLOYEE
-}
 
 enum LeaveStatus {
   PENDING
@@ -46,33 +39,59 @@ enum TokenType {
 // MODELS
 // ─────────────────────────────────────────────
 
+/// Dynamic role definitions — admins can create custom roles with an access level (1–5)
+model RoleDefinition {
+  id          String   @id @default(uuid())
+  name        String   @unique        // e.g. "BOSS", "MANAGER", "TEAM_LEAD", "INTERN"
+  displayName String                  // human-readable, e.g. "Boss / Owner"
+  description String?
+  accessLevel Int                     // 1 (lowest) → 5 (highest authority)
+  isSystem    Boolean  @default(false) // system roles cannot be deleted
+  isActive    Boolean  @default(true)
+  color       String?                 // optional UI color hex e.g. "#ff6b6b"
+
+  users       User[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([accessLevel])
+  @@map("role_definitions")
+}
+
 model User {
-  id                String    @id @default(uuid())
-  email             String    @unique
+  id                String          @id @default(uuid())
+  email             String          @unique
   password          String
   firstName         String
   lastName          String
-  role              Role      @default(EMPLOYEE)
-  isActive          Boolean   @default(true)
-  isEmailVerified   Boolean   @default(false)
+
+  // Dynamic role via RoleDefinition
+  roleId            String
+  role              RoleDefinition  @relation(fields: [roleId], references: [id])
+
+  isActive          Boolean         @default(true)
+  isEmailVerified   Boolean         @default(false)
   profilePicture    String?
   phone             String?
   department        String?
   jobTitle          String?
-  managerId         String?   // self-referencing: who manages this user
+  managerId         String?         // self-referencing: who manages this user
 
   // Relations
-  manager           User?     @relation("UserManager", fields: [managerId], references: [id])
-  subordinates      User[]    @relation("UserManager")
+  manager           User?           @relation("UserManager", fields: [managerId], references: [id])
+  subordinates      User[]          @relation("UserManager")
   tokens            Token[]
-  leaveRequests     LeaveRequest[] @relation("LeaveRequester")
-  reviewedLeaves    LeaveRequest[] @relation("LeaveReviewer")
-  auditLogs         AuditLog[]
+  leaveRequests     LeaveRequest[]  @relation("LeaveRequester")
+  reviewedLeaves    LeaveRequest[]  @relation("LeaveReviewer")
+  auditLogs         AuditLog[]      @relation("AuditPerformer")
+  affectedLogs      AuditLog[]      @relation("AuditTarget")
 
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-  deletedAt         DateTime? // soft delete
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  deletedAt         DateTime?       // soft delete
 
+  @@index([roleId])
   @@map("users")
 }
 
@@ -120,21 +139,48 @@ model LeaveRequest {
   @@map("leave_requests")
 }
 
+/// Full audit trail — every significant action is recorded here
 model AuditLog {
-  id          String   @id @default(uuid())
-  userId      String?
-  action      String
-  entity      String
-  entityId    String?
-  oldValues   Json?
-  newValues   Json?
-  ipAddress   String?
-  userAgent   String?
-  createdAt   DateTime @default(now())
+  id              String   @id @default(uuid())
 
-  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  // Who performed the action
+  performedById   String?
+  performedBy     User?    @relation("AuditPerformer", fields: [performedById], references: [id], onDelete: SetNull)
+  performedByName String?  // snapshot in case user is deleted later
+  performedByRole String?  // snapshot of role name at the time
 
-  @@index([userId])
+  // What happened
+  action          String   // e.g. USER_CREATED, ROLE_UPDATED, LEAVE_APPROVED
+  category        String   @default("GENERAL") // USER, ROLE, LEAVE, AUTH, SYSTEM
+  description     String?  // human-readable summary
+
+  // On what entity
+  entity          String   // model name: "User", "RoleDefinition", "LeaveRequest"
+  entityId        String?
+  entityName      String?  // snapshot of entity's display name
+
+  // Target user (if action was done TO a user)
+  targetUserId    String?
+  targetUser      User?    @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+  targetUserName  String?  // snapshot
+
+  // Data change snapshots
+  oldValues       Json?
+  newValues       Json?
+  metadata        Json?    // extra context (e.g. reason for rejection)
+
+  // Request context
+  ipAddress       String?
+  userAgent       String?
+  status          String   @default("SUCCESS") // SUCCESS | FAILED
+
+  createdAt       DateTime @default(now())
+
+  @@index([performedById])
+  @@index([targetUserId])
   @@index([entity, entityId])
+  @@index([action])
+  @@index([category])
+  @@index([createdAt])
   @@map("audit_logs")
 }

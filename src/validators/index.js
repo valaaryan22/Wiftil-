@@ -1,7 +1,7 @@
 'use strict';
 
 const { body, param, query } = require('express-validator');
-const { ROLES, LEAVE_TYPES } = require('../constants');
+const { LEAVE_TYPES } = require('../constants');
 
 // ─── Auth ──────────────────────────────────────────────────────
 
@@ -19,9 +19,6 @@ const registerValidator = [
   body('lastName')
     .trim().notEmpty().withMessage('Last name is required')
     .isLength({ max: 50 }).withMessage('Last name max 50 chars'),
-  body('role')
-    .optional()
-    .isIn(Object.values(ROLES)).withMessage(`Role must be one of: ${Object.values(ROLES).join(', ')}`),
   body('department').optional().trim().isLength({ max: 100 }),
   body('jobTitle').optional().trim().isLength({ max: 100 }),
   body('phone').optional().isMobilePhone().withMessage('Invalid phone number'),
@@ -68,7 +65,7 @@ const updateUserValidator = [
 
 const updateRoleValidator = [
   param('id').isUUID().withMessage('Valid user ID is required'),
-  body('role').isIn(Object.values(ROLES)).withMessage(`Role must be one of: ${Object.values(ROLES).join(', ')}`),
+  body('roleId').notEmpty().withMessage('roleId (UUID or role name) is required'),
 ];
 
 const paginationValidator = [

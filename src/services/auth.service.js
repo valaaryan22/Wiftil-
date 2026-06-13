@@ -4,14 +4,14 @@ const bcrypt = require('bcryptjs');
 const { db } = require('../database/client');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken, getRefreshTokenExpiry } = require('../utils/jwt');
 const { writeAuditLog } = require('../utils/auditLog');
-const { TOKEN_TYPES, HTTP_STATUS } = require('../constants');
+const { TOKEN_TYPES, HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
 
 const ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12');
 
 /**
- * Register a new user
+ * Register a new user (self-registration — always gets the EMPLOYEE role)
  */
-async function register({ email, password, firstName, lastName, role = 'EMPLOYEE', department, jobTitle, phone, managerId }) {
+async function register({ email, password, firstName, lastName, department, jobTitle, phone }) {
   // Check email uniqueness
   const existing = await db.user.findUnique({ where: { email } });
   if (existing) {
@@ -20,17 +20,34 @@ async function register({ email, password, firstName, lastName, role = 'EMPLOYEE
     throw err;
   }
 
+  // Self-registration always gets the lowest system role (EMPLOYEE)
+  const employeeRole = await db.roleDefinition.findUnique({ where: { name: 'EMPLOYEE' } });
+  if (!employeeRole) {
+    const err = new Error('System roles not initialized. Please contact an administrator.');
+    err.statusCode = HTTP_STATUS.INTERNAL_SERVER_ERROR;
+    throw err;
+  }
+
   const hashed = await bcrypt.hash(password, ROUNDS);
 
   const user = await db.user.create({
-    data: { email, password: hashed, firstName, lastName, role, department, jobTitle, phone, managerId },
+    data: { email, password: hashed, firstName, lastName, roleId: employeeRole.id, department, jobTitle, phone },
     select: {
       id: true, email: true, firstName: true, lastName: true,
-      role: true, department: true, jobTitle: true, isEmailVerified: true, createdAt: true,
+      department: true, jobTitle: true, isEmailVerified: true, createdAt: true,
+      role: { select: { id: true, name: true, displayName: true, accessLevel: true } },
     },
   });
 
-  await writeAuditLog({ userId: user.id, action: 'USER_REGISTERED', entity: 'User', entityId: user.id, newValues: { email, role } });
+  await writeAuditLog({
+    action:      AUDIT_ACTION.USER_REGISTERED,
+    category:    AUDIT_CATEGORY.AUTH,
+    entity:      'User',
+    entityId:    user.id,
+    entityName:  `${user.firstName} ${user.lastName}`,
+    description: `New user self-registered: ${user.email}`,
+    newValues:   { email, role: employeeRole.name },
+  });
 
   return user;
 }
@@ -43,7 +60,8 @@ async function login({ email, password, req }) {
     where: { email },
     select: {
       id: true, email: true, password: true, firstName: true, lastName: true,
-      role: true, isActive: true, isEmailVerified: true, deletedAt: true, department: true, jobTitle: true,
+      isActive: true, isEmailVerified: true, deletedAt: true, department: true, jobTitle: true,
+      role: { select: { id: true, name: true, displayName: true, accessLevel: true } },
     },
   });
 
@@ -66,7 +84,13 @@ async function login({ email, password, req }) {
     throw err;
   }
 
-  const tokenPayload = { sub: user.id, email: user.email, role: user.role };
+  // Include roleLevel in token payload so middleware can do quick checks
+  const tokenPayload = {
+    sub:       user.id,
+    email:     user.email,
+    roleName:  user.role.name,
+    roleLevel: user.role.accessLevel,
+  };
 
   const accessToken  = generateAccessToken(tokenPayload);
   const refreshToken = generateRefreshToken(tokenPayload);
@@ -83,7 +107,16 @@ async function login({ email, password, req }) {
     },
   });
 
-  await writeAuditLog({ userId: user.id, action: 'USER_LOGGED_IN', entity: 'User', entityId: user.id, req });
+  const performedBy = { id: user.id, firstName: user.firstName, lastName: user.lastName, roleName: user.role.name };
+  await writeAuditLog({
+    performedBy,
+    action:      AUDIT_ACTION.USER_LOGGED_IN,
+    category:    AUDIT_CATEGORY.AUTH,
+    entity:      'User',
+    entityId:    user.id,
+    description: `User "${user.firstName} ${user.lastName}" logged in`,
+    req,
+  });
 
   const { password: _, ...safeUser } = user;
 
@@ -141,7 +174,14 @@ async function refreshTokens({ refreshToken, req }) {
     },
   });
 
-  await writeAuditLog({ userId: user.id, action: 'TOKEN_REFRESHED', entity: 'Token', req });
+  await writeAuditLog({
+    action:    AUDIT_ACTION.TOKEN_REFRESHED,
+    category:  AUDIT_CATEGORY.AUTH,
+    entity:    'Token',
+    entityId:  user.id,
+    description: 'Access token refreshed',
+    req,
+  });
 
   return { accessToken: newAccessToken, refreshToken: newRefreshToken };
 }
@@ -157,7 +197,13 @@ async function logout({ refreshToken, userId }) {
     data:  { isRevoked: true },
   });
 
-  await writeAuditLog({ userId, action: 'USER_LOGGED_OUT', entity: 'User', entityId: userId });
+  await writeAuditLog({
+    action:      AUDIT_ACTION.USER_LOGGED_OUT,
+    category:    AUDIT_CATEGORY.AUTH,
+    entity:      'User',
+    entityId:    userId,
+    description: 'User logged out',
+  });
 }
 
 /**
@@ -169,7 +215,13 @@ async function logoutAll({ userId }) {
     data:  { isRevoked: true },
   });
 
-  await writeAuditLog({ userId, action: 'USER_LOGGED_OUT_ALL', entity: 'User', entityId: userId });
+  await writeAuditLog({
+    action:      AUDIT_ACTION.USER_LOGGED_OUT_ALL,
+    category:    AUDIT_CATEGORY.AUTH,
+    entity:      'User',
+    entityId:    userId,
+    description: 'User logged out of all devices',
+  });
 }
 
 /**
@@ -194,7 +246,13 @@ async function changePassword({ userId, currentPassword, newPassword }) {
     data:  { isRevoked: true },
   });
 
-  await writeAuditLog({ userId, action: 'PASSWORD_CHANGED', entity: 'User', entityId: userId });
+  await writeAuditLog({
+    action:      AUDIT_ACTION.PASSWORD_CHANGED,
+    category:    AUDIT_CATEGORY.AUTH,
+    entity:      'User',
+    entityId:    userId,
+    description: 'Password changed — all sessions invalidated',
+  });
 }
 
 module.exports = { register, login, refreshTokens, logout, logoutAll, changePassword };

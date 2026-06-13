@@ -1,12 +1,14 @@
 'use strict';
 
 const { verifyAccessToken } = require('../utils/jwt');
-const { db } = require('../database/client');
-const { errorResponse } = require('../utils/response');
-const { HTTP_STATUS } = require('../constants');
+const { db }                = require('../database/client');
+const { errorResponse }     = require('../utils/response');
+const { HTTP_STATUS }       = require('../constants');
 
 /**
  * authenticate — verifies the Bearer token and attaches user to req.user
+ * req.user will include: id, email, firstName, lastName,
+ *   roleId, roleName, roleLevel (accessLevel), isActive, etc.
  */
 async function authenticate(req, res, next) {
   try {
@@ -32,7 +34,7 @@ async function authenticate(req, res, next) {
       return errorResponse(res, { statusCode: HTTP_STATUS.UNAUTHORIZED, message });
     }
 
-    // Fetch user from DB — ensures they still exist and are active
+    // Fetch user from DB — include dynamic role info
     const user = await db.user.findUnique({
       where: { id: decoded.sub },
       select: {
@@ -40,13 +42,22 @@ async function authenticate(req, res, next) {
         email:           true,
         firstName:       true,
         lastName:        true,
-        role:            true,
         isActive:        true,
         isEmailVerified: true,
         department:      true,
         jobTitle:        true,
         managerId:       true,
         deletedAt:       true,
+        roleId:          true,
+        role: {
+          select: {
+            id:          true,
+            name:        true,
+            displayName: true,
+            accessLevel: true,
+            color:       true,
+          },
+        },
       },
     });
 
@@ -64,7 +75,14 @@ async function authenticate(req, res, next) {
       });
     }
 
-    req.user = user;
+    // Flatten for convenience throughout the app
+    req.user = {
+      ...user,
+      roleName:  user.role.name,
+      roleLevel: user.role.accessLevel,
+      roleColor: user.role.color,
+    };
+
     next();
   } catch (error) {
     next(error);

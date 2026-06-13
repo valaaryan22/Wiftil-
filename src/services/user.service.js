@@ -1,34 +1,134 @@
 'use strict';
 
-const { db } = require('../database/client');
-const { ROLE_WEIGHT, HTTP_STATUS } = require('../constants');
+const bcrypt = require('bcryptjs');
+const { db }            = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
+const { HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
+
+const ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12');
 
 const USER_SELECT = {
   id: true, email: true, firstName: true, lastName: true,
-  role: true, isActive: true, isEmailVerified: true,
+  isActive: true, isEmailVerified: true,
   department: true, jobTitle: true, phone: true,
-  managerId: true, profilePicture: true, createdAt: true, updatedAt: true,
+  managerId: true, profilePicture: true,
+  createdAt: true, updatedAt: true,
+  role: {
+    select: { id: true, name: true, displayName: true, accessLevel: true, color: true },
+  },
 };
 
-/**
- * Get all users (BOSS: all, MANAGER: LEADER + EMPLOYEE, LEADER: EMPLOYEE only)
- */
-async function getAllUsers({ requestingUser, page = 1, limit = 20, role, department, search }) {
-  const where = { deletedAt: null };
-  const requestingWeight = ROLE_WEIGHT[requestingUser.role];
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-  // Role-based data scoping
-  if (requestingUser.role === 'MANAGER') {
-    where.role = { in: ['LEADER', 'EMPLOYEE'] };
-  } else if (requestingUser.role === 'LEADER') {
-    where.role = 'EMPLOYEE';
-  } else if (requestingUser.role === 'EMPLOYEE') {
-    // Employees can only see themselves
-    where.id = requestingUser.id;
+/**
+ * Resolve roleId from either a roleId (UUID) or roleName string.
+ * Returns the full RoleDefinition record.
+ */
+async function resolveRole(roleIdOrName) {
+  if (!roleIdOrName) return null;
+
+  // Try UUID lookup first
+  const byId = await db.roleDefinition.findUnique({ where: { id: roleIdOrName } });
+  if (byId) return byId;
+
+  // Fallback to name lookup (case-insensitive normalised)
+  const normalized = roleIdOrName.toUpperCase().replace(/\s+/g, '_');
+  const byName = await db.roleDefinition.findUnique({ where: { name: normalized } });
+  return byName || null;
+}
+
+// ─── Services ─────────────────────────────────────────────────────────────────
+
+/**
+ * Invite / create a new user (MANAGER+ — accessLevel 4+)
+ * This is the admin-invite path, distinct from self-registration.
+ */
+async function inviteUser({ requestingUser, data, req }) {
+  if (requestingUser.roleLevel < 4) {
+    const err = new Error('Only Level-4+ users (Manager and above) can add new users');
+    err.statusCode = HTTP_STATUS.FORBIDDEN;
+    throw err;
   }
 
-  if (role) where.role = role;
+  const { email, password, firstName, lastName, roleId: rawRole, department, jobTitle, phone, managerId } = data;
+
+  // Check uniqueness
+  const existing = await db.user.findUnique({ where: { email } });
+  if (existing) {
+    const err = new Error('Email already registered');
+    err.statusCode = HTTP_STATUS.CONFLICT;
+    throw err;
+  }
+
+  // Resolve the target role
+  const targetRole = await resolveRole(rawRole);
+  if (!targetRole) {
+    const err = new Error('Invalid role specified');
+    err.statusCode = HTTP_STATUS.BAD_REQUEST;
+    throw err;
+  }
+
+  // Manager can only assign roles BELOW their own level
+  if (targetRole.accessLevel >= requestingUser.roleLevel) {
+    const err = new Error(`You can only assign roles below your own level (${requestingUser.roleLevel})`);
+    err.statusCode = HTTP_STATUS.FORBIDDEN;
+    throw err;
+  }
+
+  const hashed = await bcrypt.hash(password || `Wiftil@${Math.random().toString(36).slice(2, 10)}!`, ROUNDS);
+
+  const user = await db.user.create({
+    data: {
+      email, password: hashed, firstName, lastName,
+      roleId: targetRole.id,
+      department, jobTitle, phone, managerId,
+      isEmailVerified: false,
+    },
+    select: USER_SELECT,
+  });
+
+  await writeAuditLog({
+    performedBy:   requestingUser,
+    action:        AUDIT_ACTION.USER_CREATED,
+    category:      AUDIT_CATEGORY.USER,
+    entity:        'User',
+    entityId:      user.id,
+    entityName:    `${user.firstName} ${user.lastName}`,
+    targetUserId:  user.id,
+    targetUserName: `${user.firstName} ${user.lastName}`,
+    description:   `Created new user "${user.firstName} ${user.lastName}" <${user.email}> with role "${targetRole.displayName}" (Level ${targetRole.accessLevel})`,
+    newValues:     { email, firstName, lastName, role: targetRole.name, department, jobTitle },
+    req,
+  });
+
+  return user;
+}
+
+/**
+ * Get all users (scoped by role level)
+ * Level 5 (BOSS): all users
+ * Level 4 (MANAGER): users with level < 4
+ * Level 3 (SUPERVISOR): users with level < 3
+ * Level 2 (LEADER): users with level < 2
+ * Level 1 (EMPLOYEE): only themselves
+ */
+async function getAllUsers({ requestingUser, page = 1, limit = 20, roleId, department, search }) {
+  page  = parseInt(page);
+  limit = parseInt(limit);
+
+  const where = { deletedAt: null };
+
+  // Scope by access level
+  if (requestingUser.roleLevel < 5) {
+    if (requestingUser.roleLevel === 1) {
+      where.id = requestingUser.id;
+    } else {
+      // Only show users with LOWER access level
+      where.role = { accessLevel: { lt: requestingUser.roleLevel } };
+    }
+  }
+
+  if (roleId) where.roleId = roleId;
   if (department) where.department = { contains: department, mode: 'insensitive' };
   if (search) {
     where.OR = [
@@ -58,9 +158,8 @@ async function getUserById({ id, requestingUser }) {
     throw err;
   }
 
-  // Only allow if requester has higher or equal role, or is viewing themselves
-  const isSelf = requestingUser.id === id;
-  const canView = isSelf || ROLE_WEIGHT[requestingUser.role] > ROLE_WEIGHT[user.role];
+  const isSelf   = requestingUser.id === id;
+  const canView  = isSelf || requestingUser.roleLevel > user.role.accessLevel;
 
   if (!canView) {
     const err = new Error('Access denied');
@@ -72,10 +171,10 @@ async function getUserById({ id, requestingUser }) {
 }
 
 /**
- * Update own profile or by higher-role admin
+ * Update own profile or by higher-level admin
  */
-async function updateUser({ id, requestingUser, data }) {
-  const target = await db.user.findUnique({ where: { id, deletedAt: null } });
+async function updateUser({ id, requestingUser, data, req }) {
+  const target = await db.user.findUnique({ where: { id, deletedAt: null }, select: USER_SELECT });
   if (!target) {
     const err = new Error('User not found');
     err.statusCode = HTTP_STATUS.NOT_FOUND;
@@ -83,7 +182,7 @@ async function updateUser({ id, requestingUser, data }) {
   }
 
   const isSelf   = requestingUser.id === id;
-  const isHigher = ROLE_WEIGHT[requestingUser.role] > ROLE_WEIGHT[target.role];
+  const isHigher = requestingUser.roleLevel > target.role.accessLevel;
 
   if (!isSelf && !isHigher) {
     const err = new Error('Access denied');
@@ -98,31 +197,31 @@ async function updateUser({ id, requestingUser, data }) {
   const updated = await db.user.update({ where: { id }, data: updateData, select: USER_SELECT });
 
   await writeAuditLog({
-    userId: requestingUser.id,
-    action: 'USER_UPDATED',
-    entity: 'User',
-    entityId: id,
-    oldValues: target,
-    newValues: updateData,
+    performedBy:   requestingUser,
+    action:        AUDIT_ACTION.USER_UPDATED,
+    category:      AUDIT_CATEGORY.USER,
+    entity:        'User',
+    entityId:      id,
+    entityName:    `${target.firstName} ${target.lastName}`,
+    targetUserId:  id,
+    targetUserName: `${target.firstName} ${target.lastName}`,
+    description:   `Updated profile of "${target.firstName} ${target.lastName}"`,
+    oldValues:     target,
+    newValues:     updateData,
+    req,
   });
 
   return updated;
 }
 
 /**
- * Assign role (BOSS only for promoting to MANAGER+; MANAGER can assign LEADER/EMPLOYEE)
+ * Assign role — target role must be BELOW requester's level
  */
-async function updateUserRole({ id, requestingUser, role }) {
-  if (ROLE_WEIGHT[requestingUser.role] <= ROLE_WEIGHT[role]) {
-    const err = new Error('You cannot assign a role equal to or higher than your own');
+async function updateUserRole({ id, requestingUser, roleId: rawRole, req }) {
+  // Level 4+ (MANAGER+) can change roles
+  if (requestingUser.roleLevel < 4) {
+    const err = new Error('Level 4+ required to change user roles');
     err.statusCode = HTTP_STATUS.FORBIDDEN;
-    throw err;
-  }
-
-  const target = await db.user.findUnique({ where: { id, deletedAt: null } });
-  if (!target) {
-    const err = new Error('User not found');
-    err.statusCode = HTTP_STATUS.NOT_FOUND;
     throw err;
   }
 
@@ -132,28 +231,65 @@ async function updateUserRole({ id, requestingUser, role }) {
     throw err;
   }
 
-  const updated = await db.user.update({ where: { id }, data: { role }, select: USER_SELECT });
+  const targetRole = await resolveRole(rawRole);
+  if (!targetRole) {
+    const err = new Error('Invalid role specified');
+    err.statusCode = HTTP_STATUS.BAD_REQUEST;
+    throw err;
+  }
+
+  // Cannot assign a role >= your own level
+  if (targetRole.accessLevel >= requestingUser.roleLevel) {
+    const err = new Error(`You cannot assign a role at or above your own level (${requestingUser.roleLevel})`);
+    err.statusCode = HTTP_STATUS.FORBIDDEN;
+    throw err;
+  }
+
+  const target = await db.user.findUnique({ where: { id, deletedAt: null }, select: USER_SELECT });
+  if (!target) {
+    const err = new Error('User not found');
+    err.statusCode = HTTP_STATUS.NOT_FOUND;
+    throw err;
+  }
+
+  // Cannot change role of someone at same or higher level
+  if (target.role.accessLevel >= requestingUser.roleLevel) {
+    const err = new Error('Access denied — target user has equal or higher access level');
+    err.statusCode = HTTP_STATUS.FORBIDDEN;
+    throw err;
+  }
+
+  const updated = await db.user.update({
+    where: { id },
+    data:  { roleId: targetRole.id },
+    select: USER_SELECT,
+  });
 
   await writeAuditLog({
-    userId: requestingUser.id,
-    action: 'ROLE_UPDATED',
-    entity: 'User',
-    entityId: id,
-    oldValues: { role: target.role },
-    newValues: { role },
+    performedBy:    requestingUser,
+    action:         AUDIT_ACTION.USER_ROLE_UPDATED,
+    category:       AUDIT_CATEGORY.USER,
+    entity:         'User',
+    entityId:       id,
+    entityName:     `${target.firstName} ${target.lastName}`,
+    targetUserId:   id,
+    targetUserName: `${target.firstName} ${target.lastName}`,
+    description:    `Changed role of "${target.firstName} ${target.lastName}" from "${target.role.displayName}" to "${targetRole.displayName}"`,
+    oldValues:      { roleId: target.role.id, roleName: target.role.name, roleLevel: target.role.accessLevel },
+    newValues:      { roleId: targetRole.id, roleName: targetRole.name, roleLevel: targetRole.accessLevel },
+    req,
   });
 
   return updated;
 }
 
 /**
- * Activate / Deactivate a user (BOSS and MANAGER)
+ * Activate / Deactivate a user (Level 4+ — MANAGER+)
  */
-async function toggleUserStatus({ id, requestingUser, isActive }) {
-  const target = await db.user.findUnique({ where: { id, deletedAt: null } });
-  if (!target) {
-    const err = new Error('User not found');
-    err.statusCode = HTTP_STATUS.NOT_FOUND;
+async function toggleUserStatus({ id, requestingUser, isActive, req }) {
+  if (requestingUser.roleLevel < 4) {
+    const err = new Error('Level 4+ required to activate/deactivate users');
+    err.statusCode = HTTP_STATUS.FORBIDDEN;
     throw err;
   }
 
@@ -163,8 +299,15 @@ async function toggleUserStatus({ id, requestingUser, isActive }) {
     throw err;
   }
 
-  if (ROLE_WEIGHT[requestingUser.role] <= ROLE_WEIGHT[target.role]) {
-    const err = new Error('Access denied');
+  const target = await db.user.findUnique({ where: { id, deletedAt: null }, select: USER_SELECT });
+  if (!target) {
+    const err = new Error('User not found');
+    err.statusCode = HTTP_STATUS.NOT_FOUND;
+    throw err;
+  }
+
+  if (requestingUser.roleLevel <= target.role.accessLevel) {
+    const err = new Error('Access denied — cannot change status of user with equal or higher access level');
     err.statusCode = HTTP_STATUS.FORBIDDEN;
     throw err;
   }
@@ -172,21 +315,29 @@ async function toggleUserStatus({ id, requestingUser, isActive }) {
   const updated = await db.user.update({ where: { id }, data: { isActive }, select: USER_SELECT });
 
   await writeAuditLog({
-    userId: requestingUser.id,
-    action: isActive ? 'USER_ACTIVATED' : 'USER_DEACTIVATED',
-    entity: 'User',
-    entityId: id,
+    performedBy:    requestingUser,
+    action:         isActive ? AUDIT_ACTION.USER_ACTIVATED : AUDIT_ACTION.USER_DEACTIVATED,
+    category:       AUDIT_CATEGORY.USER,
+    entity:         'User',
+    entityId:       id,
+    entityName:     `${target.firstName} ${target.lastName}`,
+    targetUserId:   id,
+    targetUserName: `${target.firstName} ${target.lastName}`,
+    description:    `${isActive ? 'Activated' : 'Deactivated'} user "${target.firstName} ${target.lastName}"`,
+    oldValues:      { isActive: target.isActive },
+    newValues:      { isActive },
+    req,
   });
 
   return updated;
 }
 
 /**
- * Soft delete user (BOSS only)
+ * Soft delete user (Level 5 — BOSS only)
  */
-async function deleteUser({ id, requestingUser }) {
-  if (requestingUser.role !== 'BOSS') {
-    const err = new Error('Only BOSS can delete users');
+async function deleteUser({ id, requestingUser, req }) {
+  if (requestingUser.roleLevel < 5) {
+    const err = new Error('Only Level-5 (BOSS) can delete users');
     err.statusCode = HTTP_STATUS.FORBIDDEN;
     throw err;
   }
@@ -197,7 +348,7 @@ async function deleteUser({ id, requestingUser }) {
     throw err;
   }
 
-  const target = await db.user.findUnique({ where: { id, deletedAt: null } });
+  const target = await db.user.findUnique({ where: { id, deletedAt: null }, select: USER_SELECT });
   if (!target) {
     const err = new Error('User not found');
     err.statusCode = HTTP_STATUS.NOT_FOUND;
@@ -207,10 +358,17 @@ async function deleteUser({ id, requestingUser }) {
   await db.user.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } });
 
   await writeAuditLog({
-    userId: requestingUser.id,
-    action: 'USER_DELETED',
-    entity: 'User',
-    entityId: id,
+    performedBy:    requestingUser,
+    action:         AUDIT_ACTION.USER_DELETED,
+    category:       AUDIT_CATEGORY.USER,
+    entity:         'User',
+    entityId:       id,
+    entityName:     `${target.firstName} ${target.lastName}`,
+    targetUserId:   id,
+    targetUserName: `${target.firstName} ${target.lastName}`,
+    description:    `Soft-deleted user "${target.firstName} ${target.lastName}" <${target.email}>`,
+    oldValues:      { email: target.email, roleName: target.role.name },
+    req,
   });
 }
 
@@ -226,6 +384,7 @@ async function getMyTeam({ requestingUser }) {
 }
 
 module.exports = {
+  inviteUser,
   getAllUsers,
   getUserById,
   updateUser,
