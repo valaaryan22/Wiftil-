@@ -7,7 +7,7 @@ const helmet = require('helmet');
 const cors = require('cors');
 const morgan = require('morgan');
 
-const { globalRateLimiter } = require('./middlewares/rateLimiter.middleware');
+// const { globalRateLimiter } = require('./middlewares/rateLimiter.middleware');
 const { errorHandler, notFoundHandler } = require('./middlewares/error.middleware');
 const apiRouter = require('./routes/index');
 const logger = require('./utils/logger');
@@ -56,7 +56,7 @@ if (process.env.NODE_ENV !== 'test') {
 // ─────────────────────────────────────────────
 // Global Rate Limiter
 // ─────────────────────────────────────────────
-app.use(globalRateLimiter);
+// app.use(globalRateLimiter);
 
 // ─────────────────────────────────────────────
 // API Routes

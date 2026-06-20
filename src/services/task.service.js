@@ -118,16 +118,12 @@ async function getTasks({ requestingUser, page = 1, limit = 20, status, priority
   limit = parseInt(limit);
 
   const where = { deletedAt: null };
-  const assignmentWhere = {};
 
-  if (requestingUser.roleLevel >= 5) {
-    // All tasks
-  } else if (requestingUser.roleLevel >= TASK_MANAGE_MIN_LEVEL) {
-    where.managerId = requestingUser.id;
-  } else if (requestingUser.roleLevel >= 2) {
-    assignmentWhere['$assignments.team_lead_id$'] = requestingUser.id;
+  if (requestingUser.roleLevel > 3) {
+    // Can see all tasks
   } else {
-    assignmentWhere['$subTasks.assignments.member_id$'] = requestingUser.id;
+    const taskIds = await _getAccessibleTaskIds(requestingUser);
+    where.id = { [Op.in]: taskIds };
   }
 
   if (status)   where.status   = status;
@@ -425,8 +421,12 @@ async function deleteTask({ id, requestingUser, req }) {
 
 async function getTaskStats({ requestingUser }) {
   const where = { deletedAt: null };
-  if (requestingUser.roleLevel >= 5) { /* all */ }
-  else if (requestingUser.roleLevel >= 4) { where.managerId = requestingUser.id; }
+  if (requestingUser.roleLevel > 3) {
+    // Can see all tasks
+  } else {
+    const taskIds = await _getAccessibleTaskIds(requestingUser);
+    where.id = { [Op.in]: taskIds };
+  }
 
   const [byStatus, overdueCount, total] = await Promise.all([
     db.Task.findAll({
@@ -475,12 +475,45 @@ async function _getTeamLeadTask(id, user) {
 }
 
 function _assertCanViewTask(user, task) {
-  if (user.roleLevel >= 5) return;
+  if (user.roleLevel > 3) return;
   const taskJson = task.toJSON ? task.toJSON() : task;
-  if (user.roleLevel >= 4 && taskJson.manager?.id === user.id) return;
-  if (taskJson.assignments?.some(a => a.teamLead?.id === user.id)) return;
-  if (taskJson.subTasks?.some(st => st.assignments?.some(sa => sa.member?.id === user.id))) return;
+  if (taskJson.createdById === user.id) return;
+  if (taskJson.manager?.id === user.id || taskJson.managerId === user.id) return;
+  if (taskJson.assignments?.some(a => a.teamLead?.id === user.id || a.teamLeadId === user.id)) return;
+  if (taskJson.subTasks?.some(st => st.assignments?.some(sa => sa.member?.id === user.id || sa.memberId === user.id))) return;
   const err = new Error('Access denied'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+}
+
+async function _getAccessibleTaskIds(user) {
+  const taskIds = new Set();
+  
+  const directTasks = await db.Task.findAll({
+    where: {
+      [Op.or]: [
+        { managerId: user.id },
+        { createdById: user.id }
+      ],
+      deletedAt: null
+    },
+    attributes: ['id']
+  });
+  directTasks.forEach(t => taskIds.add(t.id));
+
+  const assignments = await db.TaskAssignment.findAll({
+    where: { teamLeadId: user.id },
+    attributes: ['taskId']
+  });
+  assignments.forEach(a => taskIds.add(a.taskId));
+
+  const subTaskAssignments = await db.SubTaskAssignment.findAll({
+    where: { memberId: user.id },
+    include: [{ model: db.SubTask, as: 'subTask', attributes: ['taskId'] }]
+  });
+  subTaskAssignments.forEach(sa => {
+    if (sa.subTask) taskIds.add(sa.subTask.taskId);
+  });
+
+  return Array.from(taskIds);
 }
 
 module.exports = {

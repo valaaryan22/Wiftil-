@@ -52,10 +52,10 @@ async function _getTask(taskId) {
 }
 
 function _assertIsTeamLead(user, task) {
-  if (user.roleLevel >= 5) return;
-  const taskJson = task.toJSON ? task.toJSON() : task;
-  const isLead = taskJson.assignments.some(a => a.teamLeadId === user.id);
-  if (!isLead) forbidden('Only assigned Team Leads can manage sub-tasks for this task');
+  // Any user with Level 2+ (Leader, Supervisor, Manager, Boss) can manage sub-tasks.
+  // Only Level 1 (Members/Employees) are blocked — enforced at route level via authorizeLevel(2).
+  if (user.roleLevel >= 2) return;
+  forbidden('Only users with Level 2 (Team Lead) or above can manage sub-tasks');
 }
 
 async function getFullSubTask(id) {
@@ -71,7 +71,7 @@ async function _createNotification(userId, { type, title, message, entityType, e
 // ─── CRUD ──────────────────────────────────────────────────────────────────────
 
 async function createSubTask({ requestingUser, taskId, title, description, priority, startDate, dueDate, estimatedHours, req }) {
-  if (requestingUser.roleLevel < SUBTASK_CREATE_MIN_LEVEL) forbidden('Team Lead (level 2+) required to create sub-tasks');
+  // Access guard is already applied at the route via authorizeLevel(2); no duplicate check needed here.
 
   const task = await _getTask(taskId);
   _assertIsTeamLead(requestingUser, task);
