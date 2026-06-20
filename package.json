@@ -6,23 +6,15 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:push": "prisma db push",
-    "db:studio": "prisma studio",
-    "db:seed": "node prisma/seed.js",
-    "db:reset": "prisma migrate reset --force"
-  },
-  "prisma": {
-    "seed": "node prisma/seed.js"
+    "db:sync": "node -e \"require('./src/models').sequelize.sync({ alter: true }).then(() => { console.log('DB synced'); process.exit(0); })\"",
+    "db:sync:force": "node -e \"require('./src/models').sequelize.sync({ force: true }).then(() => { console.log('DB force synced'); process.exit(0); })\"",
+    "db:seed": "node seed.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@prisma/adapter-pg": "^7.8.0",
-    "@prisma/client": "^7.8.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
@@ -32,11 +24,11 @@
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
-    "pg": "^8.21.0",
+    "mysql2": "^3.22.5",
+    "sequelize": "^6.37.8",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14",
-    "prisma": "^7.8.0"
+    "nodemon": "^3.1.14"
   }
 }

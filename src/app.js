@@ -26,8 +26,8 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(o => o
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, Postman, etc.)
-    if (!origin || allowedOrigins.includes(origin)) {
+    // Allow requests with no origin (mobile apps, Postman, etc.) or if in development
+    if (!origin || process.env.NODE_ENV === 'development' || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error('CORS policy: Not allowed by CORS'));

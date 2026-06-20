@@ -1,190 +1,130 @@
 'use strict';
 
-const { db } = require('../database/client');
-const { HTTP_STATUS } = require('../constants');
+const { Op, fn, col, literal } = require('sequelize');
+const { db }            = require('../database/client');
+const { writeAuditLog } = require('../utils/auditLog');
+const { HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
 
-const LOG_SELECT = {
-  id: true,
-  performedById: true,
-  performedByName: true,
-  performedByRole: true,
-  action: true,
-  category: true,
-  description: true,
-  entity: true,
-  entityId: true,
-  entityName: true,
-  targetUserId: true,
-  targetUserName: true,
-  oldValues: true,
-  newValues: true,
-  metadata: true,
-  ipAddress: true,
-  userAgent: true,
-  status: true,
-  createdAt: true,
-};
+const LOG_ATTRS = [
+  'id', 'performedById', 'performedByName', 'performedByRole',
+  'action', 'category', 'description', 'entity', 'entityId', 'entityName',
+  'targetUserId', 'targetUserName', 'oldValues', 'newValues', 'metadata',
+  'ipAddress', 'userAgent', 'status', 'createdAt',
+];
 
-/**
- * Query audit logs with flexible filters.
- * Level 5: all logs
- * Level 4: logs where performedById or targetUserId is one of their team
- * Level 1–3: only their own logs
- */
-async function getAuditLogs({
-  requestingUser,
-  page = 1,
-  limit = 50,
-  action,
-  category,
-  entity,
-  performedById,
-  targetUserId,
-  status,
-  dateFrom,
-  dateTo,
-  search,
-}) {
+async function getAuditLogs({ requestingUser, page = 1, limit = 50, action, category, entity, performedById, targetUserId, status, dateFrom, dateTo, search }) {
   page  = parseInt(page);
-  limit = Math.min(parseInt(limit), 200); // cap at 200
+  limit = Math.min(parseInt(limit), 200);
 
   const where = {};
 
-  // Scope based on access level
   if (requestingUser.roleLevel < 4) {
-    // Can only see their own activity
     where.performedById = requestingUser.id;
   } else if (requestingUser.roleLevel === 4) {
-    // MANAGER: can see their own + logs for users they manage
-    // For simplicity: show logs where performedById is in their subordinate tree
-    const subordinates = await db.user.findMany({
+    const subordinates = await db.User.findAll({
       where: { managerId: requestingUser.id, deletedAt: null },
-      select: { id: true },
+      attributes: ['id'],
     });
-    const ids = [requestingUser.id, ...subordinates.map((u) => u.id)];
-    where.OR = [
-      { performedById: { in: ids } },
-      { targetUserId:  { in: ids } },
+    const ids = [requestingUser.id, ...subordinates.map(u => u.id)];
+    where[Op.or] = [
+      { performedById: { [Op.in]: ids } },
+      { targetUserId:  { [Op.in]: ids } },
     ];
   }
-  // Level 5: no restriction
 
-  // Apply filters (override scope for privileged users)
-  if (action)        where.action   = { contains: action, mode: 'insensitive' };
-  if (category)      where.category = category;
-  if (entity)        where.entity   = entity;
-  if (status)        where.status   = status;
+  if (action)   where.action   = { [Op.like]: `%${action}%` };
+  if (category) where.category = category;
+  if (entity)   where.entity   = entity;
+  if (status)   where.status   = status;
   if (performedById && requestingUser.roleLevel >= 4) where.performedById = performedById;
   if (targetUserId  && requestingUser.roleLevel >= 4) where.targetUserId  = targetUserId;
 
   if (dateFrom || dateTo) {
     where.createdAt = {};
-    if (dateFrom) where.createdAt.gte = new Date(dateFrom);
-    if (dateTo)   where.createdAt.lte = new Date(dateTo);
+    if (dateFrom) where.createdAt[Op.gte] = new Date(dateFrom);
+    if (dateTo)   where.createdAt[Op.lte] = new Date(dateTo);
   }
 
   if (search) {
-    const searchClause = [
-      { description:     { contains: search, mode: 'insensitive' } },
-      { performedByName: { contains: search, mode: 'insensitive' } },
-      { targetUserName:  { contains: search, mode: 'insensitive' } },
-      { action:          { contains: search, mode: 'insensitive' } },
-      { entityName:      { contains: search, mode: 'insensitive' } },
-    ];
-    // Merge with existing OR or add new
-    if (where.OR) {
-      where.AND = [{ OR: where.OR }, { OR: searchClause }];
-      delete where.OR;
+    const searchClause = {
+      [Op.or]: [
+        { description:     { [Op.like]: `%${search}%` } },
+        { performedByName: { [Op.like]: `%${search}%` } },
+        { targetUserName:  { [Op.like]: `%${search}%` } },
+        { action:          { [Op.like]: `%${search}%` } },
+        { entityName:      { [Op.like]: `%${search}%` } },
+      ],
+    };
+    if (where[Op.or]) {
+      where[Op.and] = [{ [Op.or]: where[Op.or] }, searchClause];
+      delete where[Op.or];
     } else {
-      where.OR = searchClause;
+      Object.assign(where, searchClause);
     }
   }
 
-  const skip = (page - 1) * limit;
-
-  const [logs, total] = await Promise.all([
-    db.auditLog.findMany({
-      where,
-      select: LOG_SELECT,
-      skip,
-      take: limit,
-      orderBy: { createdAt: 'desc' },
+  const [total, logs] = await Promise.all([
+    db.AuditLog.count({ where }),
+    db.AuditLog.findAll({
+      where, attributes: LOG_ATTRS,
+      order: [['createdAt', 'DESC']],
+      offset: (page - 1) * limit, limit,
     }),
-    db.auditLog.count({ where }),
   ]);
 
   return { logs, total };
 }
 
-/**
- * Get a single audit log by ID
- */
 async function getAuditLogById({ id, requestingUser }) {
-  const log = await db.auditLog.findUnique({ where: { id }, select: LOG_SELECT });
-
+  const log = await db.AuditLog.findByPk(id, { attributes: LOG_ATTRS });
   if (!log) {
-    const err = new Error('Audit log not found');
-    err.statusCode = HTTP_STATUS.NOT_FOUND;
-    throw err;
+    const err = new Error('Audit log not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
-
-  // Enforce access: non-BOSS can only see their own logs unless they are MANAGER
   if (requestingUser.roleLevel < 4 && log.performedById !== requestingUser.id) {
-    const err = new Error('Access denied');
-    err.statusCode = HTTP_STATUS.FORBIDDEN;
-    throw err;
+    const err = new Error('Access denied'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
-
   return log;
 }
 
-/**
- * Get audit log summary stats (Level 4+)
- */
 async function getAuditStats({ requestingUser, dateFrom, dateTo }) {
   if (requestingUser.roleLevel < 4) {
-    const err = new Error('Level 4+ required to view audit statistics');
-    err.statusCode = HTTP_STATUS.FORBIDDEN;
-    throw err;
+    const err = new Error('Level 4+ required to view audit statistics'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
-  const dateFilter = {};
+  const where = {};
   if (dateFrom || dateTo) {
-    dateFilter.createdAt = {};
-    if (dateFrom) dateFilter.createdAt.gte = new Date(dateFrom);
-    if (dateTo)   dateFilter.createdAt.lte = new Date(dateTo);
+    where.createdAt = {};
+    if (dateFrom) where.createdAt[Op.gte] = new Date(dateFrom);
+    if (dateTo)   where.createdAt[Op.lte] = new Date(dateTo);
   }
 
-  const [
-    totalLogs,
-    byCategory,
-    byStatus,
-    recentActions,
-  ] = await Promise.all([
-    db.auditLog.count({ where: dateFilter }),
-    db.auditLog.groupBy({
-      by: ['category'],
-      where: dateFilter,
-      _count: { id: true },
-      orderBy: { _count: { id: 'desc' } },
+  const [totalLogs, byCategory, byStatus, recentActions] = await Promise.all([
+    db.AuditLog.count({ where }),
+    db.AuditLog.findAll({
+      where,
+      attributes: ['category', [fn('COUNT', col('id')), 'count']],
+      group: ['category'],
+      order: [[literal('count'), 'DESC']],
+      raw: true,
     }),
-    db.auditLog.groupBy({
-      by: ['status'],
-      where: dateFilter,
-      _count: { id: true },
+    db.AuditLog.findAll({
+      where,
+      attributes: ['status', [fn('COUNT', col('id')), 'count']],
+      group: ['status'],
+      raw: true,
     }),
-    db.auditLog.findMany({
-      where: dateFilter,
-      select: { action: true, createdAt: true, performedByName: true, description: true, status: true },
-      orderBy: { createdAt: 'desc' },
-      take: 10,
+    db.AuditLog.findAll({
+      where,
+      attributes: ['action', 'createdAt', 'performedByName', 'description', 'status'],
+      order: [['createdAt', 'DESC']],
+      limit: 10,
     }),
   ]);
 
   return {
     totalLogs,
-    byCategory: byCategory.map((c) => ({ category: c.category, count: c._count.id })),
-    byStatus:   byStatus.map((s)   => ({ status:   s.status,   count: s._count.id })),
+    byCategory: byCategory.map(c => ({ category: c.category, count: parseInt(c.count) })),
+    byStatus:   byStatus.map(s   => ({ status:   s.status,   count: parseInt(s.count) })),
     recentActions,
   };
 }

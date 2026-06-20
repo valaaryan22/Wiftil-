@@ -1,73 +1,65 @@
 'use strict';
 
-const bcrypt = require('bcryptjs');
-const { db } = require('../database/client');
+const { Op }           = require('sequelize');
+const { db }           = require('../database/client');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken, getRefreshTokenExpiry } = require('../utils/jwt');
 const { writeAuditLog } = require('../utils/auditLog');
 const { TOKEN_TYPES, HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
-const userCache = require('../utils/userCache');
+const userCache         = require('../utils/userCache');
 
-
-const ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12');
+const INCLUDE_ROLE = { model: db.RoleDefinition, as: 'role', attributes: ['id', 'name', 'displayName', 'accessLevel'] };
 
 /**
  * Register a new user (self-registration — always gets the EMPLOYEE role)
  */
 async function register({ email, password, firstName, lastName, department, jobTitle, phone }) {
-  // Check email uniqueness
-  const existing = await db.user.findUnique({ where: { email } });
+  const existing = await db.User.findOne({ where: { email } });
   if (existing) {
     const err = new Error('Email already registered');
     err.statusCode = HTTP_STATUS.CONFLICT;
     throw err;
   }
 
-  // Self-registration always gets the lowest system role (EMPLOYEE)
-  const employeeRole = await db.roleDefinition.findUnique({ where: { name: 'EMPLOYEE' } });
+  const employeeRole = await db.RoleDefinition.findOne({ where: { name: 'EMPLOYEE' } });
   if (!employeeRole) {
     const err = new Error('System roles not initialized. Please contact an administrator.');
     err.statusCode = HTTP_STATUS.INTERNAL_SERVER_ERROR;
     throw err;
   }
 
-  const hashed = await bcrypt.hash(password, ROUNDS);
-
-  const user = await db.user.create({
-    data: { email, password: hashed, firstName, lastName, roleId: employeeRole.id, department, jobTitle, phone },
-    select: {
-      id: true, email: true, firstName: true, lastName: true,
-      department: true, jobTitle: true, isEmailVerified: true, createdAt: true,
-      role: { select: { id: true, name: true, displayName: true, accessLevel: true } },
-    },
+  // Password hashed via User model beforeCreate hook
+  const user = await db.User.create({
+    email, password, firstName, lastName,
+    roleId: employeeRole.id, department, jobTitle, phone,
   });
+
+  const safeUser = {
+    id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName,
+    department: user.department, jobTitle: user.jobTitle, isEmailVerified: user.isEmailVerified,
+    createdAt: user.createdAt,
+    role: { id: employeeRole.id, name: employeeRole.name, displayName: employeeRole.displayName, accessLevel: employeeRole.accessLevel },
+  };
 
   await writeAuditLog({
-    action:      AUDIT_ACTION.USER_REGISTERED,
-    category:    AUDIT_CATEGORY.AUTH,
-    entity:      'User',
-    entityId:    user.id,
-    entityName:  `${user.firstName} ${user.lastName}`,
+    action: AUDIT_ACTION.USER_REGISTERED, category: AUDIT_CATEGORY.AUTH,
+    entity: 'User', entityId: user.id, entityName: `${user.firstName} ${user.lastName}`,
     description: `New user self-registered: ${user.email}`,
-    newValues:   { email, role: employeeRole.name },
+    newValues: { email, role: employeeRole.name },
   });
 
-  return user;
+  return safeUser;
 }
 
 /**
  * Login — returns access + refresh tokens
  */
 async function login({ email, password, req }) {
-  const user = await db.user.findUnique({
-    where: { email },
-    select: {
-      id: true, email: true, password: true, firstName: true, lastName: true,
-      isActive: true, isEmailVerified: true, deletedAt: true, department: true, jobTitle: true,
-      role: { select: { id: true, name: true, displayName: true, accessLevel: true } },
-    },
+  const user = await db.User.findOne({
+    where: { email, deletedAt: null },
+    include: [INCLUDE_ROLE],
   });
 
-  if (!user || user.deletedAt) {
+  if (!user) {
     const err = new Error('Invalid email or password');
     err.statusCode = HTTP_STATUS.UNAUTHORIZED;
     throw err;
@@ -79,14 +71,13 @@ async function login({ email, password, req }) {
     throw err;
   }
 
-  const passwordMatch = await bcrypt.compare(password, user.password);
+  const passwordMatch = await user.comparePassword(password);
   if (!passwordMatch) {
     const err = new Error('Invalid email or password');
     err.statusCode = HTTP_STATUS.UNAUTHORIZED;
     throw err;
   }
 
-  // Include roleLevel in token payload so middleware can do quick checks
   const tokenPayload = {
     sub:       user.id,
     email:     user.email,
@@ -97,36 +88,45 @@ async function login({ email, password, req }) {
   const accessToken  = generateAccessToken(tokenPayload);
   const refreshToken = generateRefreshToken(tokenPayload);
 
-  // Store refresh token in DB
-  await db.token.create({
-    data: {
-      userId:    user.id,
-      token:     refreshToken,
-      type:      TOKEN_TYPES.REFRESH,
-      expiresAt: getRefreshTokenExpiry(),
-      deviceInfo: req?.headers['user-agent'],
-      ipAddress:  req?.headers['x-forwarded-for'] || req?.socket?.remoteAddress,
-    },
+  await db.Token.create({
+    userId:     user.id,
+    token:      refreshToken,
+    type:       TOKEN_TYPES.REFRESH,
+    expiresAt:  getRefreshTokenExpiry(),
+    deviceInfo: req?.headers['user-agent'],
+    ipAddress:  req?.headers['x-forwarded-for'] || req?.socket?.remoteAddress,
   });
 
   const performedBy = { id: user.id, firstName: user.firstName, lastName: user.lastName, roleName: user.role.name };
   await writeAuditLog({
-    performedBy,
-    action:      AUDIT_ACTION.USER_LOGGED_IN,
-    category:    AUDIT_CATEGORY.AUTH,
-    entity:      'User',
-    entityId:    user.id,
-    description: `User "${user.firstName} ${user.lastName}" logged in`,
-    req,
+    performedBy, action: AUDIT_ACTION.USER_LOGGED_IN, category: AUDIT_CATEGORY.AUTH,
+    entity: 'User', entityId: user.id,
+    description: `User "${user.firstName} ${user.lastName}" logged in`, req,
   });
 
-  const { password: _, ...safeUser } = user;
-
+  const userJson = user.toJSON();
+  const safeUser = {
+    id:              userJson.id,
+    email:           userJson.email,
+    firstName:       userJson.firstName,
+    lastName:        userJson.lastName,
+    roleId:          userJson.roleId,
+    isActive:        userJson.isActive,
+    isEmailVerified: userJson.isEmailVerified,
+    profilePicture:  userJson.profilePicture,
+    phone:           userJson.phone,
+    department:      userJson.department,
+    jobTitle:        userJson.jobTitle,
+    managerId:       userJson.managerId,
+    createdAt:       userJson.createdAt,
+    updatedAt:       userJson.updatedAt,
+    role:            userJson.role,
+  };
   return { user: safeUser, accessToken, refreshToken };
 }
 
 /**
- * Refresh tokens — returns new access + refresh token pair (rotation)
+ * Refresh tokens — rotation
  */
 async function refreshTokens({ refreshToken, req }) {
   let decoded;
@@ -138,10 +138,9 @@ async function refreshTokens({ refreshToken, req }) {
     throw err;
   }
 
-  // Verify token exists in DB and is not revoked
-  const storedToken = await db.token.findUnique({
+  const storedToken = await db.Token.findOne({
     where: { token: refreshToken },
-    include: { user: { select: { id: true, email: true, isActive: true, deletedAt: true, role: { select: { name: true, accessLevel: true } } } } },
+    include: [{ model: db.User, as: 'user', include: [INCLUDE_ROLE] }],
   });
 
   if (!storedToken || storedToken.isRevoked || storedToken.expiresAt < new Date()) {
@@ -157,32 +156,24 @@ async function refreshTokens({ refreshToken, req }) {
   }
 
   const { user } = storedToken;
-
-  // Rotate: revoke old, issue new
-  await db.token.update({ where: { id: storedToken.id }, data: { isRevoked: true } });
+  await storedToken.update({ isRevoked: true });
 
   const tokenPayload = { sub: user.id, email: user.email, roleName: user.role.name, roleLevel: user.role.accessLevel };
   const newAccessToken  = generateAccessToken(tokenPayload);
   const newRefreshToken = generateRefreshToken(tokenPayload);
 
-  await db.token.create({
-    data: {
-      userId:    user.id,
-      token:     newRefreshToken,
-      type:      TOKEN_TYPES.REFRESH,
-      expiresAt: getRefreshTokenExpiry(),
-      deviceInfo: req?.headers['user-agent'],
-      ipAddress:  req?.headers['x-forwarded-for'] || req?.socket?.remoteAddress,
-    },
+  await db.Token.create({
+    userId:     user.id,
+    token:      newRefreshToken,
+    type:       TOKEN_TYPES.REFRESH,
+    expiresAt:  getRefreshTokenExpiry(),
+    deviceInfo: req?.headers['user-agent'],
+    ipAddress:  req?.headers['x-forwarded-for'] || req?.socket?.remoteAddress,
   });
 
   await writeAuditLog({
-    action:    AUDIT_ACTION.TOKEN_REFRESHED,
-    category:  AUDIT_CATEGORY.AUTH,
-    entity:    'Token',
-    entityId:  user.id,
-    description: 'Access token refreshed',
-    req,
+    action: AUDIT_ACTION.TOKEN_REFRESHED, category: AUDIT_CATEGORY.AUTH,
+    entity: 'Token', entityId: user.id, description: 'Access token refreshed', req,
   });
 
   return { accessToken: newAccessToken, refreshToken: newRefreshToken };
@@ -193,36 +184,27 @@ async function refreshTokens({ refreshToken, req }) {
  */
 async function logout({ refreshToken, userId }) {
   if (!refreshToken) return;
-
-  await db.token.updateMany({
-    where: { token: refreshToken, userId, isRevoked: false },
-    data:  { isRevoked: true },
-  });
-
+  await db.Token.update(
+    { isRevoked: true },
+    { where: { token: refreshToken, userId, isRevoked: false } }
+  );
   await writeAuditLog({
-    action:      AUDIT_ACTION.USER_LOGGED_OUT,
-    category:    AUDIT_CATEGORY.AUTH,
-    entity:      'User',
-    entityId:    userId,
-    description: 'User logged out',
+    action: AUDIT_ACTION.USER_LOGGED_OUT, category: AUDIT_CATEGORY.AUTH,
+    entity: 'User', entityId: userId, description: 'User logged out',
   });
 }
 
 /**
- * Logout all sessions — revoke ALL refresh tokens for a user
+ * Logout all sessions
  */
 async function logoutAll({ userId }) {
-  await db.token.updateMany({
-    where: { userId, isRevoked: false, type: TOKEN_TYPES.REFRESH },
-    data:  { isRevoked: true },
-  });
-
+  await db.Token.update(
+    { isRevoked: true },
+    { where: { userId, isRevoked: false, type: TOKEN_TYPES.REFRESH } }
+  );
   await writeAuditLog({
-    action:      AUDIT_ACTION.USER_LOGGED_OUT_ALL,
-    category:    AUDIT_CATEGORY.AUTH,
-    entity:      'User',
-    entityId:    userId,
-    description: 'User logged out of all devices',
+    action: AUDIT_ACTION.USER_LOGGED_OUT_ALL, category: AUDIT_CATEGORY.AUTH,
+    entity: 'User', entityId: userId, description: 'User logged out of all devices',
   });
 }
 
@@ -230,31 +212,27 @@ async function logoutAll({ userId }) {
  * Change password
  */
 async function changePassword({ userId, currentPassword, newPassword }) {
-  const user = await db.user.findUnique({ where: { id: userId } });
+  const user = await db.User.findByPk(userId);
 
-  const match = await bcrypt.compare(currentPassword, user.password);
+  const match = await user.comparePassword(currentPassword);
   if (!match) {
     const err = new Error('Current password is incorrect');
     err.statusCode = HTTP_STATUS.BAD_REQUEST;
     throw err;
   }
 
-  const hashed = await bcrypt.hash(newPassword, ROUNDS);
-  await db.user.update({ where: { id: userId }, data: { password: hashed } });
-  userCache.invalidateUser(userId); // force fresh fetch after password change
+  // Update will be hashed by beforeUpdate hook
+  await user.update({ password: newPassword });
+  userCache.invalidateUser(userId);
 
-
-  // Revoke all refresh tokens (force re-login everywhere)
-  await db.token.updateMany({
-    where: { userId, isRevoked: false },
-    data:  { isRevoked: true },
-  });
+  await db.Token.update(
+    { isRevoked: true },
+    { where: { userId, isRevoked: false } }
+  );
 
   await writeAuditLog({
-    action:      AUDIT_ACTION.PASSWORD_CHANGED,
-    category:    AUDIT_CATEGORY.AUTH,
-    entity:      'User',
-    entityId:    userId,
+    action: AUDIT_ACTION.PASSWORD_CHANGED, category: AUDIT_CATEGORY.AUTH,
+    entity: 'User', entityId: userId,
     description: 'Password changed — all sessions invalidated',
   });
 }

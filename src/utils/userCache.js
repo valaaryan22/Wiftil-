@@ -3,7 +3,7 @@
 /**
  * Lightweight in-memory TTL cache for user objects.
  *
- * Problem: Every API request calls db.user.findUnique() + a role JOIN in authenticate().
+ * Problem: Every API request would call db.User.findOne() + a role JOIN in authenticate().
  *          On Neon free tier this adds 100-500ms per request.
  *
  * Solution: Cache the user object keyed by userId for TTL seconds (default 60s).

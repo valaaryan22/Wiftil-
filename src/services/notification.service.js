@@ -5,40 +5,39 @@ const { db } = require('../database/client');
 async function getNotifications({ requestingUser, page = 1, limit = 20, unreadOnly = false }) {
   page  = parseInt(page);
   limit = parseInt(limit);
-
   const where = { userId: requestingUser.id };
   if (unreadOnly) where.isRead = false;
 
-  const [notifications, total, unreadCount] = await Promise.all([
-    db.notification.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      skip: (page - 1) * limit, take: limit,
+  const [total, notifications, unreadCount] = await Promise.all([
+    db.Notification.count({ where }),
+    db.Notification.findAll({
+      where, order: [['createdAt', 'DESC']],
+      offset: (page - 1) * limit, limit,
     }),
-    db.notification.count({ where }),
-    db.notification.count({ where: { userId: requestingUser.id, isRead: false } }),
+    db.Notification.count({ where: { userId: requestingUser.id, isRead: false } }),
   ]);
 
   return { notifications, total, unreadCount };
 }
 
 async function getUnreadCount({ requestingUser }) {
-  return db.notification.count({ where: { userId: requestingUser.id, isRead: false } });
+  return db.Notification.count({ where: { userId: requestingUser.id, isRead: false } });
 }
 
 async function markAsRead({ requestingUser, id }) {
-  const notif = await db.notification.findUnique({ where: { id } });
+  const notif = await db.Notification.findByPk(id);
   if (!notif || notif.userId !== requestingUser.id) {
     const err = new Error('Notification not found'); err.statusCode = 404; throw err;
   }
-  return db.notification.update({ where: { id }, data: { isRead: true, readAt: new Date() } });
+  await notif.update({ isRead: true, readAt: new Date() });
+  return notif;
 }
 
 async function markAllAsRead({ requestingUser }) {
-  const { count } = await db.notification.updateMany({
-    where: { userId: requestingUser.id, isRead: false },
-    data:  { isRead: true, readAt: new Date() },
-  });
+  const [count] = await db.Notification.update(
+    { isRead: true, readAt: new Date() },
+    { where: { userId: requestingUser.id, isRead: false } }
+  );
   return { updated: count };
 }
 

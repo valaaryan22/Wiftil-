@@ -44,30 +44,13 @@ async function authenticate(req, res, next) {
     }
 
     // ── Cache miss — fetch from DB and cache result ───────────────────────────
-    const user = await db.user.findUnique({
-      where: { id: decoded.sub },
-      select: {
-        id:              true,
-        email:           true,
-        firstName:       true,
-        lastName:        true,
-        isActive:        true,
-        isEmailVerified: true,
-        department:      true,
-        jobTitle:        true,
-        managerId:       true,
-        deletedAt:       true,
-        roleId:          true,
-        role: {
-          select: {
-            id:          true,
-            name:        true,
-            displayName: true,
-            accessLevel: true,
-            color:       true,
-          },
-        },
-      },
+    const user = await db.User.findOne({
+      where: { id: decoded.sub, deletedAt: null },
+      attributes: ['id', 'email', 'firstName', 'lastName', 'isActive', 'isEmailVerified', 'department', 'jobTitle', 'managerId', 'deletedAt', 'roleId'],
+      include: [{
+        model: db.RoleDefinition, as: 'role',
+        attributes: ['id', 'name', 'displayName', 'accessLevel', 'color'],
+      }],
     });
 
     if (!user || user.deletedAt) {
@@ -85,11 +68,12 @@ async function authenticate(req, res, next) {
     }
 
     // Flatten role fields for convenience
+    const plainUser = user.toJSON();
     const enrichedUser = {
-      ...user,
-      roleName:  user.role.name,
-      roleLevel: user.role.accessLevel,
-      roleColor: user.role.color,
+      ...plainUser,
+      roleName:  plainUser.role.name,
+      roleLevel: plainUser.role.accessLevel,
+      roleColor: plainUser.role.color,
     };
 
     // Cache for 60 seconds
