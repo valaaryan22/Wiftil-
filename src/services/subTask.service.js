@@ -44,11 +44,73 @@ function badReq(msg)    { const err = new Error(msg); err.statusCode = HTTP_STAT
 async function _getTask(taskId) {
   const task = await db.Task.findOne({
     where: { id: taskId, deletedAt: null },
-    attributes: ['id', 'title', 'status', 'managerId'],
+    attributes: ['id', 'title', 'status', 'managerId', 'estimatedHours', 'startDate', 'dueDate'],
     include: [{ model: db.TaskAssignment, as: 'assignments', attributes: ['teamLeadId'] }],
   });
   if (!task) notFound('Parent task not found');
   return task;
+}
+
+// ─── Sub-task date/hours validation against parent task ───────────────────────
+async function _validateAgainstTask(task, { startDate, dueDate, estimatedHours }, { taskId, excludeSubTaskId = null } = {}) {
+  // 1. Cumulative estimatedHours: sum of all sub-tasks must not exceed the main task's estimatedHours
+  if (estimatedHours !== undefined && estimatedHours !== null) {
+    const newHours = parseFloat(estimatedHours);
+    if (!isNaN(newHours) && task.estimatedHours !== null && task.estimatedHours !== undefined) {
+      // Sum hours of all OTHER sub-tasks for this task (exclude the one being updated)
+      const existingSubTasks = await db.SubTask.findAll({
+        where: {
+          taskId,
+          ...(excludeSubTaskId ? { id: { [Op.ne]: excludeSubTaskId } } : {}),
+        },
+        attributes: ['estimatedHours'],
+      });
+      const existingSum = existingSubTasks.reduce(
+        (sum, st) => sum + (parseFloat(st.estimatedHours) || 0), 0
+      );
+      const wouldBeTotal = existingSum + newHours;
+      if (wouldBeTotal > parseFloat(task.estimatedHours)) {
+        badReq(
+          `Total sub-task estimated hours would be ${wouldBeTotal}h ` +
+          `(existing ${existingSum}h + new ${newHours}h), ` +
+          `which exceeds the main task's limit of ${task.estimatedHours}h`
+        );
+      }
+    }
+  }
+
+  const subStart = startDate ? new Date(startDate) : null;
+  const subEnd   = dueDate   ? new Date(dueDate)   : null;
+
+  // 2. startDate must not be after dueDate
+  if (subStart && subEnd && subStart > subEnd) {
+    badReq('Sub-task start date cannot be after its due date');
+  }
+
+  // 3. Dates must fall within the parent task's date range
+  const taskStart = task.startDate ? new Date(task.startDate) : null;
+  const taskEnd   = task.dueDate   ? new Date(task.dueDate)   : null;
+
+  if (subStart && taskStart && subStart < taskStart) {
+    badReq(
+      `Sub-task start date (${subStart.toISOString().slice(0,10)}) cannot be before the main task's start date (${taskStart.toISOString().slice(0,10)})`
+    );
+  }
+  if (subStart && taskEnd && subStart > taskEnd) {
+    badReq(
+      `Sub-task start date (${subStart.toISOString().slice(0,10)}) cannot be after the main task's due date (${taskEnd.toISOString().slice(0,10)})`
+    );
+  }
+  if (subEnd && taskEnd && subEnd > taskEnd) {
+    badReq(
+      `Sub-task due date (${subEnd.toISOString().slice(0,10)}) cannot be after the main task's due date (${taskEnd.toISOString().slice(0,10)})`
+    );
+  }
+  if (subEnd && taskStart && subEnd < taskStart) {
+    badReq(
+      `Sub-task due date (${subEnd.toISOString().slice(0,10)}) cannot be before the main task's start date (${taskStart.toISOString().slice(0,10)})`
+    );
+  }
 }
 
 function _assertIsTeamLead(user, task) {
@@ -79,6 +141,9 @@ async function createSubTask({ requestingUser, taskId, title, description, prior
   if (!['ACCEPTED', 'IN_PROGRESS', 'REOPENED'].includes(task.status)) {
     conflict(`Cannot create sub-tasks when task is "${task.status}"`);
   }
+
+  // ── Validate hours & dates against the parent task ──
+  await _validateAgainstTask(task, { startDate, dueDate, estimatedHours }, { taskId });
 
   const subTask = await db.SubTask.create({
     taskId, title, description,
@@ -127,7 +192,7 @@ async function updateSubTask({ requestingUser, taskId, id, data, req }) {
   const task = await _getTask(taskId);
   _assertIsTeamLead(requestingUser, task);
 
-  const subTask = await db.SubTask.findOne({ where: { id, taskId }, attributes: ['id', 'title', 'status'] });
+  const subTask = await db.SubTask.findOne({ where: { id, taskId }, attributes: ['id', 'title', 'status', 'startDate', 'dueDate', 'estimatedHours'] });
   if (!subTask) notFound();
 
   const editable = ['CREATED', 'ASSIGNED', 'LOCKED', 'AVAILABLE'];
@@ -136,6 +201,13 @@ async function updateSubTask({ requestingUser, taskId, id, data, req }) {
   const allowed = ['title', 'description', 'priority', 'startDate', 'dueDate', 'estimatedHours'];
   const updateData = {};
   allowed.forEach(f => { if (data[f] !== undefined) updateData[f] = data[f]; });
+
+  // ── Validate hours & dates against the parent task (merge with existing values, exclude self from sum) ──
+  await _validateAgainstTask(task, {
+    startDate:      'startDate'      in updateData ? updateData.startDate      : subTask.startDate,
+    dueDate:        'dueDate'        in updateData ? updateData.dueDate        : subTask.dueDate,
+    estimatedHours: 'estimatedHours' in updateData ? updateData.estimatedHours : subTask.estimatedHours,
+  }, { taskId, excludeSubTaskId: id });
 
   await subTask.update(updateData);
 
@@ -159,6 +231,9 @@ async function deleteSubTask({ requestingUser, taskId, id, req }) {
   if (!deletable.includes(subTask.status)) conflict('Cannot delete a sub-task that has been started');
 
   await subTask.destroy();
+
+  // Recalculate parent task completion after deletion so the percentage stays accurate
+  await _updateTaskCompletion(taskId);
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.SUBTASK_DELETED, category: AUDIT_CATEGORY.TASK,

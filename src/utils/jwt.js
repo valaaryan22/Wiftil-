@@ -78,4 +78,5 @@ module.exports = {
   verifyRefreshToken,
   getAccessTokenExpiry,
   getRefreshTokenExpiry,
+  parseDurationMs,
 };

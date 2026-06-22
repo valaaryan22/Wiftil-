@@ -80,7 +80,7 @@ async function createTask({ requestingUser, title, description, priority, startD
     });
     if (!mgr) notFound('Assigned manager not found');
     if (mgr.role.accessLevel < TASK_MANAGE_MIN_LEVEL) {
-      const err = new Error('Assigned user must be a Manager (level 4+)'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
+      const err = new Error('Assigned user must be level 3+'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
     }
   }
 
@@ -213,7 +213,7 @@ async function assignManager({ id, requestingUser, managerId, req }) {
   if (!task) notFound();
   if (!mgr)  notFound('Manager not found');
   if (mgr.role.accessLevel < TASK_MANAGE_MIN_LEVEL) {
-    const err = new Error('Assigned user must be a Manager (level 4+)'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
+    const err = new Error('Assigned user must be level 3+'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
   }
 
   await task.update({ managerId, status: TASK_STATUS.ASSIGNED });
@@ -330,7 +330,25 @@ async function assignTeamLeads({ id, requestingUser, teamLeadIds, req }) {
 }
 
 async function submitTask({ id, requestingUser, req }) {
-  const task = await _getTeamLeadTask(id, requestingUser);
+  // Allow: assigned team leads OR the task creator (e.g. Admin who created it)
+  let task;
+  const directTask = await db.Task.findOne({
+    where: { id, deletedAt: null },
+    attributes: ['id', 'title', 'status', 'managerId', 'createdById'],
+    include: [{ model: db.TaskAssignment, as: 'assignments', attributes: ['teamLeadId'] }],
+  });
+  if (!directTask) notFound();
+
+  const isCreator    = directTask.createdById === requestingUser.id;
+  const isAssignedTL = directTask.assignments?.some(a => a.teamLeadId === requestingUser.id);
+  const isHighLevel  = requestingUser.roleLevel >= 5; // Admin/Boss can always submit
+
+  if (!isCreator && !isAssignedTL && !isHighLevel) {
+    const err = new Error('Access denied — you must be the task creator or an assigned team lead to submit');
+    err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  }
+  task = directTask;
+
   assertStatus(task, [TASK_STATUS.IN_PROGRESS], 'Task must be IN_PROGRESS to submit');
 
   const pendingSubTasks = await db.SubTask.count({

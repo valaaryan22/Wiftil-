@@ -2,7 +2,7 @@
 
 const { Op }           = require('sequelize');
 const { db }           = require('../database/client');
-const { generateAccessToken, generateRefreshToken, verifyRefreshToken, getRefreshTokenExpiry } = require('../utils/jwt');
+const { generateAccessToken, generateRefreshToken, verifyRefreshToken, getRefreshTokenExpiry, getAccessTokenExpiry, parseDurationMs } = require('../utils/jwt');
 const { writeAuditLog } = require('../utils/auditLog');
 const { TOKEN_TYPES, HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
 const userCache         = require('../utils/userCache');
@@ -126,7 +126,11 @@ async function login({ email, password, req }) {
 }
 
 /**
- * Refresh tokens — rotation
+ * Refresh tokens
+ * — If the stored refresh token still has more time remaining than the
+ *   access-token TTL (env: JWT_ACCESS_EXPIRES_IN), we reuse it instead
+ *   of rotating. This avoids duplicate-insert race conditions and
+ *   unnecessary token churn for rapid consecutive calls.
  */
 async function refreshTokens({ refreshToken, req }) {
   let decoded;
@@ -156,27 +160,40 @@ async function refreshTokens({ refreshToken, req }) {
   }
 
   const { user } = storedToken;
-  await storedToken.update({ isRevoked: true });
-
   const tokenPayload = { sub: user.id, email: user.email, roleName: user.role.name, roleLevel: user.role.accessLevel };
-  const newAccessToken  = generateAccessToken(tokenPayload);
-  const newRefreshToken = generateRefreshToken(tokenPayload);
+  const newAccessToken = generateAccessToken(tokenPayload);
 
-  await db.Token.create({
-    userId:     user.id,
-    token:      newRefreshToken,
-    type:       TOKEN_TYPES.REFRESH,
-    expiresAt:  getRefreshTokenExpiry(),
-    deviceInfo: req?.headers['user-agent'],
-    ipAddress:  req?.headers['x-forwarded-for'] || req?.socket?.remoteAddress,
-  });
+  // ── Reuse vs Rotate decision ──────────────────────────────────────────
+  // If the stored refresh token has more time remaining than one full
+  // access-token TTL, return it as-is (no DB write needed).
+  const accessTtlMs    = parseDurationMs(process.env.JWT_ACCESS_EXPIRES_IN || '15m');
+  const remainingMs    = new Date(storedToken.expiresAt).getTime() - Date.now();
+  const shouldRotate   = remainingMs <= accessTtlMs;
+
+  let outRefreshToken = refreshToken; // default: reuse
+
+  if (shouldRotate) {
+    // Revoke old token and issue a fresh one
+    await storedToken.update({ isRevoked: true });
+    outRefreshToken = generateRefreshToken(tokenPayload);
+    await db.Token.create({
+      userId:     user.id,
+      token:      outRefreshToken,
+      type:       TOKEN_TYPES.REFRESH,
+      expiresAt:  getRefreshTokenExpiry(),
+      deviceInfo: req?.headers['user-agent'],
+      ipAddress:  req?.headers['x-forwarded-for'] || req?.socket?.remoteAddress,
+    });
+  }
 
   await writeAuditLog({
     action: AUDIT_ACTION.TOKEN_REFRESHED, category: AUDIT_CATEGORY.AUTH,
-    entity: 'Token', entityId: user.id, description: 'Access token refreshed', req,
+    entity: 'Token', entityId: user.id,
+    description: shouldRotate ? 'Access token refreshed — refresh token rotated' : 'Access token refreshed — refresh token reused',
+    req,
   });
 
-  return { accessToken: newAccessToken, refreshToken: newRefreshToken };
+  return { accessToken: newAccessToken, refreshToken: outRefreshToken };
 }
 
 /**

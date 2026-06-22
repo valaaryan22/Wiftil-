@@ -58,26 +58,28 @@ async function rateSubTask({ requestingUser, subTaskId, ratedUserId, quality, ti
   const contributionPct = parseFloat(assignment.contribution) || 100;
   const overall = parseFloat((scores.rawOverall * (contributionPct / 100)).toFixed(2));
 
-  const [rating, created] = await db.PerformanceRating.findOrCreate({
+  // Check if this member has already been rated for this sub-task
+  const existingRating = await db.PerformanceRating.findOne({
     where: { subTaskId, ratedUserId },
-    defaults: {
-      subTaskId, ratedUserId, ratedById: requestingUser.id,
-      ratingType: 'SUBTASK',
-      quality: scores.quality, timeliness: scores.timeliness,
-      communication: scores.communication, accuracy: scores.accuracy,
-      ownership: scores.ownership,
-      overall, contributionPct, comments,
-    },
+    include: [{ model: db.User, as: 'ratedUser', attributes: ['firstName', 'lastName'] }],
   });
-  if (!created) {
-    await rating.update({
-      quality: scores.quality, timeliness: scores.timeliness,
-      communication: scores.communication, accuracy: scores.accuracy,
-      ownership: scores.ownership,
-      overall, contributionPct, comments,
-      ratedById: requestingUser.id, ratedAt: new Date(),
-    });
+  if (existingRating) {
+    const name = existingRating.ratedUser
+      ? `${existingRating.ratedUser.firstName} ${existingRating.ratedUser.lastName}`
+      : ratedUserId;
+    const err = new Error(`"${name}" has already been rated for this sub-task. Each member can only be rated once per sub-task.`);
+    err.statusCode = HTTP_STATUS.CONFLICT;
+    throw err;
   }
+
+  const rating = await db.PerformanceRating.create({
+    subTaskId, ratedUserId, ratedById: requestingUser.id,
+    ratingType: 'SUBTASK',
+    quality: scores.quality, timeliness: scores.timeliness,
+    communication: scores.communication, accuracy: scores.accuracy,
+    ownership: scores.ownership,
+    overall, contributionPct, comments,
+  });
 
   const fullRating = await db.PerformanceRating.findByPk(rating.id, {
     include: [

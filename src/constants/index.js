@@ -25,7 +25,7 @@ const USER_STATUS_MIN_LEVEL    = 4;
 
 // Task permission levels
 const TASK_CREATE_MIN_LEVEL    = 5; // Only BOSS/Admin creates main tasks
-const TASK_MANAGE_MIN_LEVEL    = 4; // Manager accepts/assigns/approves
+const TASK_MANAGE_MIN_LEVEL    = 3; // Manager/Supervisor accepts/assigns/approves
 const SUBTASK_CREATE_MIN_LEVEL = 2; // Team Lead (level 2+) creates sub-tasks
 const RATING_MIN_LEVEL         = 4; // Manager rates performance
 
