@@ -38,7 +38,7 @@ async function inviteUser({ requestingUser, data, req }) {
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
-  const { email, password, firstName, lastName, roleId: rawRole, department, jobTitle, phone, managerId } = data;
+  const { email, password, firstName, lastName, roleId: rawRole, department, jobTitle, phone, managerId, profilePicture } = data;
 
   const existing = await db.User.findOne({ where: { email } });
   if (existing) {
@@ -62,6 +62,7 @@ async function inviteUser({ requestingUser, data, req }) {
     password: password || `Wiftil@${Math.random().toString(36).slice(2, 10)}!`,
     firstName, lastName, roleId: targetRole.id,
     department, jobTitle, phone, managerId, isEmailVerified: false,
+    profilePicture,
   });
 
   const created = await db.User.findByPk(user.id, { attributes: USER_ATTRS, include: [INCLUDE_ROLE] });

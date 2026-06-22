@@ -9,6 +9,7 @@ const { authorizeLevel, authorizeSelfOrLevel } = require('../middlewares/authori
 const { validate }               = require('../middlewares/validate.middleware');
 const { body, param, query }     = require('express-validator');
 const { updateUserValidator, paginationValidator } = require('../validators');
+const upload                     = require('../middlewares/upload.middleware');
 
 // All user routes require authentication
 router.use(authenticate);
@@ -18,6 +19,7 @@ router.use(authenticate);
 router.post(
   '/',
   authorizeLevel(4),
+  upload.single('profilePic'),
   [
     body('email').isEmail().withMessage('Valid email required').normalizeEmail(),
     body('password')
@@ -55,6 +57,16 @@ router.patch(
   validate,
   authorizeSelfOrLevel(2),
   userController.updateUser
+);
+
+// POST /users/:id/profile-picture — self or higher level
+router.post(
+  '/:id/profile-picture',
+  [param('id').isUUID().withMessage('Valid user ID required')],
+  validate,
+  authorizeSelfOrLevel(2),
+  upload.single('profilePic'),
+  userController.uploadProfilePicture
 );
 
 // PATCH /users/:id/role — Level 4+ (MANAGER+)

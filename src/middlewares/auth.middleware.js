@@ -46,7 +46,7 @@ async function authenticate(req, res, next) {
     // ── Cache miss — fetch from DB and cache result ───────────────────────────
     const user = await db.User.findOne({
       where: { id: decoded.sub, deletedAt: null },
-      attributes: ['id', 'email', 'firstName', 'lastName', 'isActive', 'isEmailVerified', 'department', 'jobTitle', 'managerId', 'deletedAt', 'roleId'],
+      attributes: ['id', 'email', 'firstName', 'lastName', 'isActive', 'isEmailVerified', 'department', 'jobTitle', 'managerId', 'deletedAt', 'roleId', 'profilePicture'],
       include: [{
         model: db.RoleDefinition, as: 'role',
         attributes: ['id', 'name', 'displayName', 'accessLevel', 'color'],

@@ -230,7 +230,7 @@ async function startSubTask({ requestingUser, taskId, id, req }) {
   const subTask = await _getMemberSubTask(id, taskId, requestingUser);
 
   if (subTask.status === 'LOCKED') conflict('This sub-task is locked — prerequisite sub-tasks must be completed first');
-  if (!['AVAILABLE', 'ASSIGNED', 'REOPENED'].includes(subTask.status)) conflict(`Cannot start sub-task in status "${subTask.status}"`);
+  if (!['AVAILABLE', 'ASSIGNED', 'REOPENED', 'TEAM_LEAD_REJECTED'].includes(subTask.status)) conflict(`Cannot start sub-task in status "${subTask.status}"`);
 
   await subTask.update({ status: SUBTASK_STATUS.IN_PROGRESS, startedAt: new Date() });
 

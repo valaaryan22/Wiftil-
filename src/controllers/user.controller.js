@@ -2,12 +2,30 @@
 
 const userService = require('../services/user.service');
 const { successResponse, paginatedResponse } = require('../utils/response');
+const { uploadImage } = require('../utils/cloudinary');
+const fs = require('fs');
 
 async function inviteUser(req, res, next) {
   try {
-    const user = await userService.inviteUser({ requestingUser: req.user, data: req.body, req });
+    let profilePictureUrl = null;
+    if (req.file) {
+      profilePictureUrl = await uploadImage(req.file.path);
+      fs.unlink(req.file.path, (err) => {
+        if (err) console.error('Failed to delete temp file:', err);
+      });
+    }
+
+    const userData = { ...req.body };
+    if (profilePictureUrl) {
+      userData.profilePicture = profilePictureUrl;
+    }
+
+    const user = await userService.inviteUser({ requestingUser: req.user, data: userData, req });
     return successResponse(res, { statusCode: 201, message: 'User created successfully', data: { user } });
   } catch (err) {
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
     next(err);
   }
 }
@@ -88,7 +106,40 @@ async function getMyTeam(req, res, next) {
   }
 }
 
+async function uploadProfilePicture(req, res, next) {
+  try {
+    if (!req.file) {
+      const err = new Error('No image file provided');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    // Upload to Cloudinary
+    const imageUrl = await uploadImage(req.file.path);
+
+    // Delete temp file asynchronously
+    fs.unlink(req.file.path, (err) => {
+      if (err) console.error('Failed to delete temp file:', err);
+    });
+
+    // Update user profile picture using existing service method
+    const user = await userService.updateUser({
+      id: req.params.id,
+      requestingUser: req.user,
+      data: { profilePicture: imageUrl },
+      req,
+    });
+
+    return successResponse(res, { message: 'Profile picture uploaded successfully', data: { user } });
+  } catch (err) {
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    next(err);
+  }
+}
+
 module.exports = {
   inviteUser, getAllUsers, getUserById, updateUser,
-  updateUserRole, toggleUserStatus, deleteUser, getMyTeam,
+  updateUserRole, toggleUserStatus, deleteUser, getMyTeam, uploadProfilePicture,
 };

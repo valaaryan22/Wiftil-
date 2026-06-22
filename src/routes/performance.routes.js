@@ -12,13 +12,25 @@ router.use(authenticate);
 router.get('/leaderboard', ctrl.getLeaderboard);
 
 // ── Dashboards ────────────────────────────────────────────────────────────────
-router.get('/dashboard/member',  ctrl.getMemberDashboard);   // Any user (own stats)
-router.get('/dashboard/team',    authorizeLevel(2), ctrl.getTeamDashboard);    // Team Lead+
-router.get('/dashboard/manager', authorizeLevel(4), ctrl.getManagerDashboard); // Manager+
+router.get('/dashboard/member',  ctrl.getMemberDashboard);                      // Any authenticated user (own stats)
+router.get('/dashboard/team',    authorizeLevel(2), ctrl.getTeamDashboard);     // Team Lead+ (also shows personal DIRECT ratings)
+router.get('/dashboard/manager', authorizeLevel(4), ctrl.getManagerDashboard);  // Manager+   (also shows personal DIRECT ratings)
 
-// ── Ratings ──────────────────────────────────────────────────────────────────
-router.post('/rate/:subTaskId',  authorizeLevel(4), ctrl.rateSubTask);         // Manager rates
-router.get('/user/:userId',      ctrl.getUserPerformance);                      // User's history
-router.get('/me',                ctrl.getMemberDashboard);                      // Own dashboard
+// ── Sub-task Ratings (Manager rates Member on a completed sub-task) ───────────
+// POST /api/v1/performance/rate/subtask/:subTaskId
+// Body: { ratedUserId, quality, timeliness, communication, accuracy, ownership, comments? }
+// NOTE: For sub-tasks with multiple members, call this once per member.
+//       'overall' is automatically weighted by each member's contribution %.
+router.post('/rate/subtask/:subTaskId', authorizeLevel(4), ctrl.rateSubTask);
+
+// ── Direct Ratings (Boss/Admin rates a Manager or Team Lead) ─────────────────
+// POST /api/v1/performance/rate/user/:userId
+// Body: { periodLabel, quality, timeliness, communication, accuracy, ownership, comments? }
+// periodLabel example: "Q2 2026", "June 2026"
+router.post('/rate/user/:userId', authorizeLevel(5), ctrl.rateUserDirectly);
+
+// ── User Performance History ──────────────────────────────────────────────────
+router.get('/user/:userId', ctrl.getUserPerformance);  // Manager+ can view others; members see own only
+router.get('/me', ctrl.getMemberDashboard);            // Own dashboard shortcut
 
 module.exports = router;
