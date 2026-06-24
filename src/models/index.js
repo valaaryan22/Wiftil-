@@ -21,19 +21,27 @@ const sequelize = new Sequelize(
   }
 );
 
-// Auto-load all model files in this directory
-fs
-  .readdirSync(__dirname)
-  .filter(file =>
-    file.indexOf('.') !== 0 &&
-    file !== basename &&
-    file.slice(-3) === '.js' &&
-    file.indexOf('.test.js') === -1
-  )
-  .forEach(file => {
-    const model = require(path.join(__dirname, file))(sequelize, Sequelize.DataTypes);
-    db[model.name] = model;
-  });
+// Auto-load all model files statically (required for Vercel/Webpack bundlers)
+const modelFiles = [
+  require('./AuditLog.js')(sequelize, Sequelize.DataTypes),
+  require('./LeaveRequest.js')(sequelize, Sequelize.DataTypes),
+  require('./Notification.js')(sequelize, Sequelize.DataTypes),
+  require('./PerformanceRating.js')(sequelize, Sequelize.DataTypes),
+  require('./RoleDefinition.js')(sequelize, Sequelize.DataTypes),
+  require('./SubTask.js')(sequelize, Sequelize.DataTypes),
+  require('./SubTaskAssignment.js')(sequelize, Sequelize.DataTypes),
+  require('./SubTaskDependency.js')(sequelize, Sequelize.DataTypes),
+  require('./Task.js')(sequelize, Sequelize.DataTypes),
+  require('./TaskAssignment.js')(sequelize, Sequelize.DataTypes),
+  require('./TaskAttachment.js')(sequelize, Sequelize.DataTypes),
+  require('./TaskComment.js')(sequelize, Sequelize.DataTypes),
+  require('./Token.js')(sequelize, Sequelize.DataTypes),
+  require('./User.js')(sequelize, Sequelize.DataTypes),
+];
+
+modelFiles.forEach(model => {
+  db[model.name] = model;
+});
 
 // Run associations
 Object.keys(db).forEach(modelName => {
