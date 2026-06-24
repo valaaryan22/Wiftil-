@@ -2,10 +2,11 @@
 
 
 require('dotenv').config();
-const express = require('express');
-const helmet = require('helmet');
-const cors = require('cors');
-const morgan = require('morgan');
+const express     = require('express');
+const helmet      = require('helmet');
+const cors        = require('cors');
+const morgan      = require('morgan');
+const compression = require('compression');
 
 // const { globalRateLimiter } = require('./middlewares/rateLimiter.middleware');
 const { errorHandler, notFoundHandler } = require('./middlewares/error.middleware');
@@ -13,6 +14,27 @@ const apiRouter = require('./routes/index');
 const logger = require('./utils/logger');
 
 const app = express();
+
+// ─────────────────────────────────────────────
+// Response-Time Header (visible in Postman / DevTools)
+// ─────────────────────────────────────────────
+app.use((req, res, next) => {
+  const start = Date.now();
+  // Override res.end() to inject the header before the response is flushed
+  const originalEnd = res.end.bind(res);
+  res.end = function (...args) {
+    if (!res.headersSent) {
+      res.setHeader('X-Response-Time', `${Date.now() - start}ms`);
+    }
+    return originalEnd(...args);
+  };
+  next();
+});
+
+// ─────────────────────────────────────────────
+// Gzip Compression (reduces payload up to 70%)
+// ─────────────────────────────────────────────
+app.use(compression({ level: 6, threshold: 1024 }));
 
 // ─────────────────────────────────────────────
 // Security Headers

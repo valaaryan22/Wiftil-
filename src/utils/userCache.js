@@ -13,7 +13,7 @@
  * in-memory only (fine for a single-instance Node server).
  */
 
-const DEFAULT_TTL_MS = 60 * 1000; // 60 seconds
+const DEFAULT_TTL_MS = 5 * 60 * 1000; // 5 minutes (was 60s — longer TTL = more cache hits on remote DB)
 
 const store = new Map(); // userId -> { user, expiresAt }
 

@@ -503,33 +503,31 @@ function _assertCanViewTask(user, task) {
 }
 
 async function _getAccessibleTaskIds(user) {
+  // Run all 3 lookups in PARALLEL → 1 round-trip instead of 3
+  const [directTasks, assignments, subTaskAssignments] = await Promise.all([
+    db.Task.findAll({
+      where: {
+        [Op.or]: [{ managerId: user.id }, { createdById: user.id }],
+        deletedAt: null,
+      },
+      attributes: ['id'],
+      raw: true,
+    }),
+    db.TaskAssignment.findAll({
+      where: { teamLeadId: user.id },
+      attributes: ['taskId'],
+      raw: true,
+    }),
+    db.SubTaskAssignment.findAll({
+      where: { memberId: user.id },
+      include: [{ model: db.SubTask, as: 'subTask', attributes: ['taskId'] }],
+    }),
+  ]);
+
   const taskIds = new Set();
-  
-  const directTasks = await db.Task.findAll({
-    where: {
-      [Op.or]: [
-        { managerId: user.id },
-        { createdById: user.id }
-      ],
-      deletedAt: null
-    },
-    attributes: ['id']
-  });
   directTasks.forEach(t => taskIds.add(t.id));
-
-  const assignments = await db.TaskAssignment.findAll({
-    where: { teamLeadId: user.id },
-    attributes: ['taskId']
-  });
   assignments.forEach(a => taskIds.add(a.taskId));
-
-  const subTaskAssignments = await db.SubTaskAssignment.findAll({
-    where: { memberId: user.id },
-    include: [{ model: db.SubTask, as: 'subTask', attributes: ['taskId'] }]
-  });
-  subTaskAssignments.forEach(sa => {
-    if (sa.subTask) taskIds.add(sa.subTask.taskId);
-  });
+  subTaskAssignments.forEach(sa => { if (sa.subTask) taskIds.add(sa.subTask.taskId); });
 
   return Array.from(taskIds);
 }
