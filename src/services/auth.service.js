@@ -79,10 +79,21 @@ async function login({ email, password, req }) {
   }
 
   const tokenPayload = {
-    sub:       user.id,
-    email:     user.email,
-    roleName:  user.role.name,
-    roleLevel: user.role.accessLevel,
+    sub:             user.id,
+    email:           user.email,
+    firstName:       user.firstName,
+    lastName:        user.lastName,
+    isActive:        user.isActive,
+    isEmailVerified: user.isEmailVerified,
+    department:      user.department      || null,
+    jobTitle:        user.jobTitle        || null,
+    managerId:       user.managerId       || null,
+    profilePicture:  user.profilePicture  || null,
+    roleId:          user.role.id,
+    roleName:        user.role.name,
+    roleLevel:       user.role.accessLevel,
+    roleDisplay:     user.role.displayName,
+    roleColor:       user.role.color      || null,
   };
 
   const accessToken  = generateAccessToken(tokenPayload);
@@ -160,7 +171,23 @@ async function refreshTokens({ refreshToken, req }) {
   }
 
   const { user } = storedToken;
-  const tokenPayload = { sub: user.id, email: user.email, roleName: user.role.name, roleLevel: user.role.accessLevel };
+  const tokenPayload = {
+    sub:             user.id,
+    email:           user.email,
+    firstName:       user.firstName,
+    lastName:        user.lastName,
+    isActive:        user.isActive,
+    isEmailVerified: user.isEmailVerified,
+    department:      user.department      || null,
+    jobTitle:        user.jobTitle        || null,
+    managerId:       user.managerId       || null,
+    profilePicture:  user.profilePicture  || null,
+    roleId:          user.role.id,
+    roleName:        user.role.name,
+    roleLevel:       user.role.accessLevel,
+    roleDisplay:     user.role.displayName,
+    roleColor:       user.role.color      || null,
+  };
   const newAccessToken = generateAccessToken(tokenPayload);
 
   // ── Reuse vs Rotate decision ──────────────────────────────────────────
