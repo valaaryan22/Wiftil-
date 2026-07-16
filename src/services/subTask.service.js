@@ -114,10 +114,10 @@ async function _validateAgainstTask(task, { startDate, dueDate, estimatedHours }
 }
 
 function _assertIsTeamLead(user, task) {
-  // Any user with Level 2+ (Leader, Supervisor, Manager, Boss) can manage sub-tasks.
-  // Only Level 1 (Members/Employees) are blocked — enforced at route level via authorizeLevel(2).
-  if (user.roleLevel >= 2) return;
-  forbidden('Only users with Level 2 (Team Lead) or above can manage sub-tasks');
+  // Any user with Level <= 4 (TEAM_LEAD and above) can manage sub-tasks.
+  // Only Level 5+ (EMPLOYEE and below) are blocked.
+  if (user.roleLevel <= 4) return;
+  forbidden('Only users with Team Lead level or above (level ≤ 4) can manage sub-tasks');
 }
 
 async function getFullSubTask(id) {
@@ -170,8 +170,8 @@ async function getSubTasks({ requestingUser, taskId, status }) {
   const where = { taskId };
   if (status) where.status = status;
 
-  if (requestingUser.roleLevel === 1) {
-    // Member: only see sub-tasks they're assigned to
+  if (requestingUser.roleLevel >= 5) {
+    // Employee: only see sub-tasks they're assigned to
     const assignedIds = await db.SubTaskAssignment.findAll({
       where: { memberId: requestingUser.id },
       attributes: ['subTaskId'],
@@ -524,7 +524,8 @@ async function _getMemberSubTask(id, taskId, user) {
     include: [{ model: db.SubTaskAssignment, as: 'assignments', attributes: ['memberId'] }],
   });
   if (!subTask) notFound();
-  if (user.roleLevel < 5) {
+  if (user.roleLevel > 1) {
+    // Not BOSS: verify assignment
     const subTaskJson = subTask.toJSON ? subTask.toJSON() : subTask;
     const isAssigned = subTaskJson.assignments.some(a => a.memberId === user.id);
     if (!isAssigned) forbidden('Not assigned to this sub-task');

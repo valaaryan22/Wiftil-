@@ -21,13 +21,16 @@ async function seed() {
     console.log('Database synced (force: all tables recreated).');
 
     // ── Roles ──────────────────────────────────────────────────────────────────
+    // Level 1 = BOSS (highest authority). Lower number = more authority.
+    // Add new roles at level 6, 7, … to extend the hierarchy downward without
+    // ever touching BOSS's level.
     console.log('\nCreating system roles...');
     const createdRoles = await db.RoleDefinition.bulkCreate([
-      { name: 'EMPLOYEE',  displayName: 'Employee',       description: 'Base role for all employees',       accessLevel: 1, isSystem: true },
-      { name: 'TEAM_LEAD', displayName: 'Team Lead',      description: 'Leads a team and manages sub-tasks', accessLevel: 2, isSystem: true },
+      { name: 'BOSS',      displayName: 'Boss',           description: 'Highest authority — full access',   accessLevel: 1, isSystem: true, color: '#FFD700' },
+      { name: 'ADMIN',     displayName: 'Administrator',  description: 'System administrator',               accessLevel: 2, isSystem: true },
       { name: 'MANAGER',   displayName: 'Manager',        description: 'Manages projects and tasks',         accessLevel: 3, isSystem: true },
-      { name: 'ADMIN',     displayName: 'Administrator',  description: 'System administrator',               accessLevel: 4, isSystem: true },
-      { name: 'BOSS',      displayName: 'Boss',           description: 'Highest level — full access',        accessLevel: 5, isSystem: true, color: '#FFD700' },
+      { name: 'TEAM_LEAD', displayName: 'Team Lead',      description: 'Leads a team and manages sub-tasks', accessLevel: 4, isSystem: true },
+      { name: 'EMPLOYEE',  displayName: 'Employee',       description: 'Base role for all employees',        accessLevel: 5, isSystem: true },
     ], { returning: true });
     console.log(`  ✓ ${createdRoles.length} roles created`);
 

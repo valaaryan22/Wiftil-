@@ -1,33 +1,57 @@
 'use strict';
 
+/**
+ * Access Level System — Lower number = HIGHER authority.
+ *
+ *   Level 1  →  BOSS        (top authority, level never changes)
+ *   Level 2  →  ADMIN
+ *   Level 3  →  MANAGER
+ *   Level 4  →  TEAM_LEAD
+ *   Level 5  →  EMPLOYEE
+ *   Level 6+ →  any future custom roles added below Employee
+ *
+ * New roles can be added at any level > 1 without touching BOSS.
+ * Comparisons: roleLevel <= threshold means "at least that rank or higher".
+ */
+
 const SYSTEM_ROLE_NAMES = Object.freeze({
-  BOSS:       'BOSS',
-  MANAGER:    'MANAGER',
-  SUPERVISOR: 'SUPERVISOR',
-  LEADER:     'LEADER',
-  EMPLOYEE:   'EMPLOYEE',
+  BOSS:      'BOSS',
+  ADMIN:     'ADMIN',
+  MANAGER:   'MANAGER',
+  TEAM_LEAD: 'TEAM_LEAD',
+  EMPLOYEE:  'EMPLOYEE',
 });
 
-const ACCESS_LEVEL = Object.freeze({
-  BOSS:       5,
-  MANAGER:    4,
-  SUPERVISOR: 3,
-  LEADER:     2,
-  EMPLOYEE:   1,
-});
+// ─── Permission thresholds (roleLevel <= X means the user has at least that rank) ─
+// BOSS_LEVEL is the absolute top — always 1 and never changes.
+const BOSS_LEVEL = 1;
 
-// ─── Permission thresholds ────────────────────────────────────────────────────
-const LEAVE_APPROVAL_MIN_LEVEL = 2;
-const USER_INVITE_MIN_LEVEL    = 4;
-const ROLE_MANAGE_MIN_LEVEL    = 5;
-const USER_DELETE_MIN_LEVEL    = 5;
-const USER_STATUS_MIN_LEVEL    = 4;
+const LEAVE_APPROVAL_MAX_LEVEL  = 4; // Level ≤ 4 (TEAM_LEAD+) can approve leave
+const USER_INVITE_MAX_LEVEL     = 3; // Level ≤ 3 (MANAGER+) can invite users
+const ROLE_MANAGE_MAX_LEVEL     = 2; // Level ≤ 2 (ADMIN+)   can manage roles
+const USER_DELETE_MAX_LEVEL     = 2; // Level ≤ 2 (ADMIN+)   can delete users
+const USER_STATUS_MAX_LEVEL     = 3; // Level ≤ 3 (MANAGER+) can toggle user status
 
 // Task permission levels
-const TASK_CREATE_MIN_LEVEL    = 5; // Only BOSS/Admin creates main tasks
-const TASK_MANAGE_MIN_LEVEL    = 3; // Manager/Supervisor accepts/assigns/approves
-const SUBTASK_CREATE_MIN_LEVEL = 2; // Team Lead (level 2+) creates sub-tasks
-const RATING_MIN_LEVEL         = 4; // Manager rates performance
+const TASK_CREATE_MAX_LEVEL     = 2; // Level ≤ 2 (ADMIN/BOSS) creates main tasks
+const TASK_MANAGE_MAX_LEVEL     = 3; // Level ≤ 3 (MANAGER+) accepts/assigns/approves
+const SUBTASK_CREATE_MAX_LEVEL  = 4; // Level ≤ 4 (TEAM_LEAD+) creates sub-tasks
+const RATING_MAX_LEVEL          = 3; // Level ≤ 3 (MANAGER+) rates performance
+
+// Client permissions
+const CLIENT_MANAGE_MAX_LEVEL   = 3; // Level ≤ 3 (MANAGER+) can create/update/delete clients
+
+// ─── Legacy aliases (kept so old call-sites compile without mass-rename) ─────────
+// These point to the same constants under the old names.
+const LEAVE_APPROVAL_MIN_LEVEL  = LEAVE_APPROVAL_MAX_LEVEL;
+const USER_INVITE_MIN_LEVEL     = USER_INVITE_MAX_LEVEL;
+const ROLE_MANAGE_MIN_LEVEL     = ROLE_MANAGE_MAX_LEVEL;
+const USER_DELETE_MIN_LEVEL     = USER_DELETE_MAX_LEVEL;
+const USER_STATUS_MIN_LEVEL     = USER_STATUS_MAX_LEVEL;
+const TASK_CREATE_MIN_LEVEL     = TASK_CREATE_MAX_LEVEL;
+const TASK_MANAGE_MIN_LEVEL     = TASK_MANAGE_MAX_LEVEL;
+const SUBTASK_CREATE_MIN_LEVEL  = SUBTASK_CREATE_MAX_LEVEL;
+const RATING_MIN_LEVEL          = RATING_MAX_LEVEL;
 
 const TOKEN_TYPES = Object.freeze({
   REFRESH:        'REFRESH',
@@ -106,6 +130,7 @@ const AUDIT_CATEGORY = Object.freeze({
   LEAVE:  'LEAVE',
   AUTH:   'AUTH',
   TASK:   'TASK',
+  CLIENT: 'CLIENT',
   SYSTEM: 'SYSTEM',
 });
 
@@ -165,11 +190,35 @@ const AUDIT_ACTION = Object.freeze({
   COMMENT_ADDED:         'COMMENT_ADDED',
   COMMENT_UPDATED:       'COMMENT_UPDATED',
   COMMENT_DELETED:       'COMMENT_DELETED',
+  // Clients
+  CLIENT_CREATED:        'CLIENT_CREATED',
+  CLIENT_UPDATED:        'CLIENT_UPDATED',
+  CLIENT_DELETED:        'CLIENT_DELETED',
+  // Client Contacts
+  CLIENT_CONTACT_CREATED: 'CLIENT_CONTACT_CREATED',
+  CLIENT_CONTACT_UPDATED: 'CLIENT_CONTACT_UPDATED',
+  CLIENT_CONTACT_DELETED: 'CLIENT_CONTACT_DELETED',
+  // Client Communication Logs
+  CLIENT_COMM_LOGGED:    'CLIENT_COMM_LOGGED',
+  CLIENT_COMM_UPDATED:   'CLIENT_COMM_UPDATED',
+  CLIENT_COMM_DELETED:   'CLIENT_COMM_DELETED',
 });
 
 module.exports = {
   SYSTEM_ROLE_NAMES,
-  ACCESS_LEVEL,
+  BOSS_LEVEL,
+  // New-style threshold names
+  LEAVE_APPROVAL_MAX_LEVEL,
+  USER_INVITE_MAX_LEVEL,
+  ROLE_MANAGE_MAX_LEVEL,
+  USER_DELETE_MAX_LEVEL,
+  USER_STATUS_MAX_LEVEL,
+  TASK_CREATE_MAX_LEVEL,
+  TASK_MANAGE_MAX_LEVEL,
+  SUBTASK_CREATE_MAX_LEVEL,
+  RATING_MAX_LEVEL,
+  CLIENT_MANAGE_MAX_LEVEL,
+  // Legacy aliases (backward-compat)
   LEAVE_APPROVAL_MIN_LEVEL,
   USER_INVITE_MIN_LEVEL,
   ROLE_MANAGE_MIN_LEVEL,

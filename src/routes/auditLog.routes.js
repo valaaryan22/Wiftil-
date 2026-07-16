@@ -11,10 +11,10 @@ const { param, query }   = require('express-validator');
 
 router.use(authenticate);
 
-// GET /audit-logs/stats — Level 4+ only
+// GET /audit-logs/stats — Level ≤ 3 (MANAGER+)
 router.get(
   '/stats',
-  authorizeLevel(4),
+  authorizeLevel(3),
   [
     query('dateFrom').optional().isISO8601().withMessage('dateFrom must be ISO date'),
     query('dateTo').optional().isISO8601().withMessage('dateTo must be ISO date'),

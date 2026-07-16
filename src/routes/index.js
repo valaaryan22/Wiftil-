@@ -13,6 +13,9 @@ const subTaskRoutes      = require('./subTask.routes');
 const performanceRoutes  = require('./performance.routes');
 const commentRoutes      = require('./comment.routes');
 const notificationRoutes = require('./notification.routes');
+const clientRoutes       = require('./client.routes');
+const clientContactRoutes        = require('./clientContact.routes');
+const clientCommunicationLogRoutes = require('./clientCommunicationLog.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -20,7 +23,7 @@ router.get('/health', (req, res) => {
     success: true,
     message: 'Wiftil API is running',
     version: '2.0.0',
-    modules: ['auth', 'users', 'roles', 'leaves', 'tasks', 'performance', 'notifications'],
+    modules: ['auth', 'users', 'roles', 'leaves', 'tasks', 'performance', 'notifications', 'clients'],
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
   });
@@ -32,6 +35,9 @@ router.use('/users',       userRoutes);
 router.use('/leaves',      leaveRoutes);
 router.use('/roles',       roleRoutes);
 router.use('/audit-logs',  auditLogRoutes);
+router.use('/clients',     clientRoutes);
+router.use('/clients/:clientId/contacts', clientContactRoutes);
+router.use('/clients/:clientId/comms',    clientCommunicationLogRoutes);
 
 // ── Task management module ────────────────────────────────────────────────────
 router.use('/tasks',                                          taskRoutes);

@@ -61,11 +61,11 @@ async function seed() {
   // ── 1. Roles ──────────────────────────────────────────────────────────────
   console.log('🌱 Seeding roles...');
   const roleRows = [
-    { name: 'EMPLOYEE',   displayName: 'Employee',    accessLevel: 1, color: '#6B7280', isSystem: true, description: 'Regular team member' },
-    { name: 'LEADER',     displayName: 'Team Leader', accessLevel: 2, color: '#3B82F6', isSystem: true, description: 'Leads a small team' },
+    { name: 'EMPLOYEE',   displayName: 'Employee',    accessLevel: 5, color: '#6B7280', isSystem: true, description: 'Regular team member' },
+    { name: 'LEADER',     displayName: 'Team Leader', accessLevel: 4, color: '#3B82F6', isSystem: true, description: 'Leads a small team' },
     { name: 'SUPERVISOR', displayName: 'Supervisor',  accessLevel: 3, color: '#8B5CF6', isSystem: true, description: 'Oversees team leads' },
-    { name: 'MANAGER',    displayName: 'Manager',     accessLevel: 4, color: '#F59E0B', isSystem: true, description: 'Manages supervisors' },
-    { name: 'BOSS',       displayName: 'Boss',        accessLevel: 5, color: '#EF4444', isSystem: true, description: 'Top-level executive' },
+    { name: 'MANAGER',    displayName: 'Manager',     accessLevel: 2, color: '#F59E0B', isSystem: true, description: 'Manages supervisors' },
+    { name: 'BOSS',       displayName: 'Boss',        accessLevel: 1, color: '#EF4444', isSystem: true, description: 'Top-level executive' },
   ];
   const roles = {};
   for (const r of roleRows) {

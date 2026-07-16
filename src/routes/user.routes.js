@@ -15,10 +15,10 @@ const upload                     = require('../middlewares/upload.middleware');
 router.use(authenticate);
 
 // ─── Admin: Invite / Create User ─────────────────────────────────────────────
-// POST /users — Level 4+ (MANAGER+) can add users
+// POST /users — Level ≤ 3 (MANAGER+) can add users
 router.post(
   '/',
-  authorizeLevel(4),
+  authorizeLevel(3),
   upload.single('profilePic'),
   [
     body('email').isEmail().withMessage('Valid email required').normalizeEmail(),
@@ -43,19 +43,19 @@ router.post(
 // GET /users — role-scoped list
 router.get('/', paginationValidator, validate, userController.getAllUsers);
 
-// GET /users/my-team — direct subordinates (Level 2+)
-router.get('/my-team', authorizeLevel(2), userController.getMyTeam);
+// GET /users/my-team — direct subordinates (Level ≤ 4 = TEAM_LEAD+)
+router.get('/my-team', authorizeLevel(4), userController.getMyTeam);
 
 // ─── Individual User ──────────────────────────────────────────────────────────
-// GET /users/:id — self or level 2+
-router.get('/:id', [param('id').isUUID()], validate, authorizeSelfOrLevel(2), userController.getUserById);
+// GET /users/:id — self or level ≤ 4 (TEAM_LEAD+)
+router.get('/:id', [param('id').isUUID()], validate, authorizeSelfOrLevel(4), userController.getUserById);
 
 // PATCH /users/:id — self or higher level
 router.patch(
   '/:id',
   updateUserValidator,
   validate,
-  authorizeSelfOrLevel(2),
+  authorizeSelfOrLevel(4),
   userController.updateUser
 );
 
@@ -64,15 +64,15 @@ router.post(
   '/:id/profile-picture',
   [param('id').isUUID().withMessage('Valid user ID required')],
   validate,
-  authorizeSelfOrLevel(2),
+  authorizeSelfOrLevel(4),
   upload.single('profilePic'),
   userController.uploadProfilePicture
 );
 
-// PATCH /users/:id/role — Level 4+ (MANAGER+)
+// PATCH /users/:id/role — Level ≤ 3 (MANAGER+)
 router.patch(
   '/:id/role',
-  authorizeLevel(4),
+  authorizeLevel(3),
   [
     param('id').isUUID().withMessage('Valid user ID required'),
     body('roleId').notEmpty().withMessage('roleId is required'),
@@ -81,10 +81,10 @@ router.patch(
   userController.updateUserRole
 );
 
-// PATCH /users/:id/status — Level 4+ (MANAGER+)
+// PATCH /users/:id/status — Level ≤ 3 (MANAGER+)
 router.patch(
   '/:id/status',
-  authorizeLevel(4),
+  authorizeLevel(3),
   [
     param('id').isUUID().withMessage('Valid user ID required'),
     body('isActive').isBoolean().withMessage('isActive must be a boolean').toBoolean(),
@@ -93,10 +93,10 @@ router.patch(
   userController.toggleUserStatus
 );
 
-// DELETE /users/:id — Level 5 (BOSS only)
+// DELETE /users/:id — Level ≤ 2 (BOSS or ADMIN)
 router.delete(
   '/:id',
-  authorizeLevel(5),
+  authorizeLevel(2),
   [param('id').isUUID().withMessage('Valid user ID required')],
   validate,
   userController.deleteUser

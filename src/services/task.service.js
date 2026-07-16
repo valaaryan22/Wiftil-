@@ -32,9 +32,10 @@ const TASK_ATTRS = [
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function assertLevel(user, min, msg) {
-  if (user.roleLevel < min) {
-    const err = new Error(msg || `Minimum access level ${min} required`);
+function assertLevel(user, maxLevel, msg) {
+  // Lower number = more authority. User passes if their level <= maxLevel.
+  if (user.roleLevel > maxLevel) {
+    const err = new Error(msg || `Access level ≤ ${maxLevel} required`);
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 }
@@ -70,7 +71,7 @@ async function _createNotifications(userIds, { type, title, message, entityType,
 // ─── Service Functions ────────────────────────────────────────────────────────
 
 async function createTask({ requestingUser, title, description, priority, startDate, dueDate, estimatedHours, managerId, req }) {
-  assertLevel(requestingUser, TASK_CREATE_MIN_LEVEL, 'Only Admin (level 5) can create main tasks');
+  assertLevel(requestingUser, TASK_CREATE_MIN_LEVEL, 'Only BOSS or ADMIN (level ≤ 2) can create main tasks');
 
   if (managerId) {
     const mgr = await db.User.findOne({
@@ -79,8 +80,8 @@ async function createTask({ requestingUser, title, description, priority, startD
       include: [{ model: db.RoleDefinition, as: 'role', attributes: ['accessLevel'] }],
     });
     if (!mgr) notFound('Assigned manager not found');
-    if (mgr.role.accessLevel < TASK_MANAGE_MIN_LEVEL) {
-      const err = new Error('Assigned user must be level 3+'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
+    if (mgr.role.accessLevel > TASK_MANAGE_MIN_LEVEL) {
+      const err = new Error('Assigned user must be Manager level or above (level ≤ 3)'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
     }
   }
 
@@ -119,8 +120,8 @@ async function getTasks({ requestingUser, page = 1, limit = 20, status, priority
 
   const where = { deletedAt: null };
 
-  if (requestingUser.roleLevel > 3) {
-    // Can see all tasks
+  if (requestingUser.roleLevel <= 3) {
+    // BOSS/ADMIN/MANAGER can see all tasks
   } else {
     const taskIds = await _getAccessibleTaskIds(requestingUser);
     where.id = { [Op.in]: taskIds };
@@ -212,8 +213,8 @@ async function assignManager({ id, requestingUser, managerId, req }) {
 
   if (!task) notFound();
   if (!mgr)  notFound('Manager not found');
-  if (mgr.role.accessLevel < TASK_MANAGE_MIN_LEVEL) {
-    const err = new Error('Assigned user must be level 3+'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
+  if (mgr.role.accessLevel > TASK_MANAGE_MIN_LEVEL) {
+    const err = new Error('Assigned user must be Manager level or above (level ≤ 3)'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
   }
 
   await task.update({ managerId, status: TASK_STATUS.ASSIGNED });
@@ -299,9 +300,9 @@ async function assignTeamLeads({ id, requestingUser, teamLeadIds, req }) {
   });
 
   if (leads.length !== teamLeadIds.length) notFound('One or more Team Leads not found');
-  const invalidLead = leads.find(l => l.role.accessLevel < 2);
+  const invalidLead = leads.find(l => l.role.accessLevel > SUBTASK_CREATE_MIN_LEVEL);
   if (invalidLead) {
-    const err = new Error(`User "${invalidLead.firstName}" does not have Team Lead level`); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
+    const err = new Error(`User "${invalidLead.firstName}" does not have Team Lead level or above`); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
   }
 
   // Upsert assignments
@@ -341,7 +342,7 @@ async function submitTask({ id, requestingUser, req }) {
 
   const isCreator    = directTask.createdById === requestingUser.id;
   const isAssignedTL = directTask.assignments?.some(a => a.teamLeadId === requestingUser.id);
-  const isHighLevel  = requestingUser.roleLevel >= 5; // Admin/Boss can always submit
+  const isHighLevel  = requestingUser.roleLevel <= 2; // BOSS/ADMIN can always submit
 
   if (!isCreator && !isAssignedTL && !isHighLevel) {
     const err = new Error('Access denied — you must be the task creator or an assigned team lead to submit');
@@ -439,7 +440,7 @@ async function deleteTask({ id, requestingUser, req }) {
 
 async function getTaskStats({ requestingUser }) {
   const where = { deletedAt: null };
-  if (requestingUser.roleLevel > 3) {
+  if (requestingUser.roleLevel <= 3) {
     // Can see all tasks
   } else {
     const taskIds = await _getAccessibleTaskIds(requestingUser);
@@ -474,7 +475,7 @@ async function _getManagerTask(id, user) {
     include: [{ model: db.TaskAssignment, as: 'assignments', attributes: ['teamLeadId'] }],
   });
   if (!task) notFound();
-  if (task.managerId !== user.id && user.roleLevel < 5) {
+  if (task.managerId !== user.id && user.roleLevel > 2) {
     const err = new Error('Access denied — not your task'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
   return task;
@@ -493,7 +494,7 @@ async function _getTeamLeadTask(id, user) {
 }
 
 function _assertCanViewTask(user, task) {
-  if (user.roleLevel > 3) return;
+  if (user.roleLevel <= 3) return; // MANAGER or above can view all tasks
   const taskJson = task.toJSON ? task.toJSON() : task;
   if (taskJson.createdById === user.id) return;
   if (taskJson.manager?.id === user.id || taskJson.managerId === user.id) return;

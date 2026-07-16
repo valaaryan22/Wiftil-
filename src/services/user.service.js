@@ -33,8 +33,9 @@ function formatUser(user) {
 // ─── Services ─────────────────────────────────────────────────────────────────
 
 async function inviteUser({ requestingUser, data, req }) {
-  if (requestingUser.roleLevel < 4) {
-    const err = new Error('Only Level-4+ users (Manager and above) can add new users');
+  // Level <= 3 (MANAGER and above) can invite users
+  if (requestingUser.roleLevel > 3) {
+    const err = new Error('Only Manager level and above (level ≤ 3) can add new users');
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
@@ -52,8 +53,9 @@ async function inviteUser({ requestingUser, data, req }) {
     err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
   }
 
-  if (targetRole.accessLevel >= requestingUser.roleLevel) {
-    const err = new Error(`You can only assign roles below your own level (${requestingUser.roleLevel})`);
+  // Cannot assign a role with equal or higher authority (lower or equal number)
+  if (targetRole.accessLevel <= requestingUser.roleLevel) {
+    const err = new Error(`You can only assign roles with lower authority than your own (your level: ${requestingUser.roleLevel})`);
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
@@ -87,11 +89,14 @@ async function getAllUsers({ requestingUser, page = 1, limit = 20, roleId, depar
   const userWhere = { deletedAt: null };
   const roleWhere = {};
 
-  if (requestingUser.roleLevel < 5) {
-    if (requestingUser.roleLevel === 1) {
+  // BOSS (level 1) can see all users; level 1 employees can only see themselves
+  if (requestingUser.roleLevel > 1) {
+    if (requestingUser.roleLevel >= 5) {
+      // Employee: only see themselves
       userWhere.id = requestingUser.id;
     } else {
-      roleWhere.accessLevel = { [Op.lt]: requestingUser.roleLevel };
+      // Others: only see users with less authority (higher level number)
+      roleWhere.accessLevel = { [Op.gt]: requestingUser.roleLevel };
     }
   }
 
@@ -129,7 +134,8 @@ async function getUserById({ id, requestingUser }) {
   }
 
   const isSelf  = requestingUser.id === id;
-  const canView = isSelf || requestingUser.roleLevel > user.role.accessLevel;
+  // Can view if self, or if requester has higher authority (lower level number)
+  const canView = isSelf || requestingUser.roleLevel < user.role.accessLevel;
   if (!canView) {
     const err = new Error('Access denied'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
@@ -144,7 +150,7 @@ async function updateUser({ id, requestingUser, data, req }) {
   }
 
   const isSelf   = requestingUser.id === id;
-  const isHigher = requestingUser.roleLevel > target.role.accessLevel;
+  const isHigher = requestingUser.roleLevel < target.role.accessLevel;
   if (!isSelf && !isHigher) {
     const err = new Error('Access denied'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
@@ -170,8 +176,9 @@ async function updateUser({ id, requestingUser, data, req }) {
 }
 
 async function updateUserRole({ id, requestingUser, roleId: rawRole, req }) {
-  if (requestingUser.roleLevel < 4) {
-    const err = new Error('Level 4+ required to change user roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  // Level <= 3 (MANAGER+) required to change user roles
+  if (requestingUser.roleLevel > 3) {
+    const err = new Error('Manager level or above (level ≤ 3) required to change user roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
   if (id === requestingUser.id) {
     const err = new Error('Cannot change your own role'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
@@ -181,8 +188,9 @@ async function updateUserRole({ id, requestingUser, roleId: rawRole, req }) {
   if (!targetRole) {
     const err = new Error('Invalid role specified'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
   }
-  if (targetRole.accessLevel >= requestingUser.roleLevel) {
-    const err = new Error(`You cannot assign a role at or above your own level (${requestingUser.roleLevel})`);
+  // Cannot assign a role with equal or higher authority
+  if (targetRole.accessLevel <= requestingUser.roleLevel) {
+    const err = new Error(`You cannot assign a role with equal or higher authority than your own (your level: ${requestingUser.roleLevel})`);
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
@@ -190,8 +198,9 @@ async function updateUserRole({ id, requestingUser, roleId: rawRole, req }) {
   if (!target) {
     const err = new Error('User not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
-  if (target.role.accessLevel >= requestingUser.roleLevel) {
-    const err = new Error('Access denied — target user has equal or higher access level');
+  // Target user must have less authority (higher level number) than requester
+  if (target.role.accessLevel <= requestingUser.roleLevel) {
+    const err = new Error('Access denied — target user has equal or higher authority');
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
@@ -213,8 +222,9 @@ async function updateUserRole({ id, requestingUser, roleId: rawRole, req }) {
 }
 
 async function toggleUserStatus({ id, requestingUser, isActive, req }) {
-  if (requestingUser.roleLevel < 4) {
-    const err = new Error('Level 4+ required to activate/deactivate users'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  // Level <= 3 (MANAGER+) required to activate/deactivate users
+  if (requestingUser.roleLevel > 3) {
+    const err = new Error('Manager level or above (level ≤ 3) required to activate/deactivate users'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
   if (id === requestingUser.id) {
     const err = new Error('Cannot change your own status'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
@@ -224,8 +234,9 @@ async function toggleUserStatus({ id, requestingUser, isActive, req }) {
   if (!target) {
     const err = new Error('User not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
-  if (requestingUser.roleLevel <= target.role.accessLevel) {
-    const err = new Error('Access denied — cannot change status of user with equal or higher access level');
+  // Requester must have more authority (lower level number) than the target
+  if (requestingUser.roleLevel >= target.role.accessLevel) {
+    const err = new Error('Access denied — cannot change status of user with equal or higher authority');
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
@@ -247,8 +258,9 @@ async function toggleUserStatus({ id, requestingUser, isActive, req }) {
 }
 
 async function deleteUser({ id, requestingUser, req }) {
-  if (requestingUser.roleLevel < 5) {
-    const err = new Error('Only Level-5 (BOSS) can delete users'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  // Level <= 2 (ADMIN/BOSS) can delete users
+  if (requestingUser.roleLevel > 2) {
+    const err = new Error('Only BOSS or ADMIN (level ≤ 2) can delete users'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
   if (id === requestingUser.id) {
     const err = new Error('Cannot delete yourself'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;

@@ -37,6 +37,9 @@ const modelFiles = [
   require('./TaskComment.js')(sequelize, Sequelize.DataTypes),
   require('./Token.js')(sequelize, Sequelize.DataTypes),
   require('./User.js')(sequelize, Sequelize.DataTypes),
+  require('./Client.js')(sequelize, Sequelize.DataTypes),
+  require('./ClientContact.js')(sequelize, Sequelize.DataTypes),
+  require('./ClientCommunicationLog.js')(sequelize, Sequelize.DataTypes),
 ];
 
 modelFiles.forEach(model => {

@@ -65,11 +65,18 @@ async function getRoleById(id) {
 }
 
 async function createRole({ requestingUser, name, displayName, description, accessLevel, color }) {
-  if (requestingUser.roleLevel < 5) {
-    const err = new Error('Only level-5 admins (BOSS) can create roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  // Only BOSS (level 1) or ADMIN (level 2) can create roles
+  if (requestingUser.roleLevel > 2) {
+    const err = new Error('Only BOSS or ADMIN (level ≤ 2) can create roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
-  if (accessLevel >= requestingUser.roleLevel) {
-    const err = new Error('Cannot create a role with access level equal to or higher than your own');
+  // Cannot create a role at level 1 (BOSS is always level 1)
+  if (accessLevel <= 1) {
+    const err = new Error('Access level 1 is reserved for BOSS and cannot be assigned to new roles');
+    err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  }
+  // Cannot create a role at the same or higher authority as yourself (smaller or equal number)
+  if (accessLevel <= requestingUser.roleLevel) {
+    const err = new Error(`Cannot create a role with equal or higher authority than your own (your level: ${requestingUser.roleLevel})`);
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
@@ -93,8 +100,9 @@ async function createRole({ requestingUser, name, displayName, description, acce
 }
 
 async function updateRole({ requestingUser, id, displayName, description, accessLevel, color, isActive }) {
-  if (requestingUser.roleLevel < 5) {
-    const err = new Error('Only level-5 admins (BOSS) can update roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  // Only BOSS (level 1) or ADMIN (level 2) can update roles
+  if (requestingUser.roleLevel > 2) {
+    const err = new Error('Only BOSS or ADMIN (level ≤ 2) can update roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
   const existing = await db.RoleDefinition.findByPk(id, { attributes: ROLE_ATTRS });
@@ -126,8 +134,9 @@ async function updateRole({ requestingUser, id, displayName, description, access
 }
 
 async function deleteRole({ requestingUser, id }) {
-  if (requestingUser.roleLevel < 5) {
-    const err = new Error('Only level-5 admins (BOSS) can delete roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  // Only BOSS (level 1) or ADMIN (level 2) can delete roles
+  if (requestingUser.roleLevel > 2) {
+    const err = new Error('Only BOSS or ADMIN (level ≤ 2) can delete roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
   const existing = await db.RoleDefinition.findByPk(id, { attributes: ROLE_ATTRS });
