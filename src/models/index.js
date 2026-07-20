@@ -40,6 +40,15 @@ const modelFiles = [
   require('./Client.js')(sequelize, Sequelize.DataTypes),
   require('./ClientContact.js')(sequelize, Sequelize.DataTypes),
   require('./ClientCommunicationLog.js')(sequelize, Sequelize.DataTypes),
+  // Package / Docket / Ticket module
+  require('./ServiceCatalog.js')(sequelize, Sequelize.DataTypes),
+  require('./ClientPackage.js')(sequelize, Sequelize.DataTypes),
+  require('./PackageService.js')(sequelize, Sequelize.DataTypes),
+  require('./PackageAddOn.js')(sequelize, Sequelize.DataTypes),
+  require('./Docket.js')(sequelize, Sequelize.DataTypes),
+  require('./DocketTicket.js')(sequelize, Sequelize.DataTypes),
+  // Client Documents module
+  require('./ClientDocument.js')(sequelize, Sequelize.DataTypes),
 ];
 
 modelFiles.forEach(model => {

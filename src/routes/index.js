@@ -16,6 +16,12 @@ const notificationRoutes = require('./notification.routes');
 const clientRoutes       = require('./client.routes');
 const clientContactRoutes        = require('./clientContact.routes');
 const clientCommunicationLogRoutes = require('./clientCommunicationLog.routes');
+const serviceRoutes      = require('./service.routes');
+const packageRoutes      = require('./package.routes');
+const packageItemRoutes  = require('./packageItem.routes');
+const docketRoutes       = require('./docket.routes');
+const docketItemRoutes   = require('./docketItem.routes');
+const clientDocumentRoutes = require('./clientDocument.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -38,6 +44,9 @@ router.use('/audit-logs',  auditLogRoutes);
 router.use('/clients',     clientRoutes);
 router.use('/clients/:clientId/contacts', clientContactRoutes);
 router.use('/clients/:clientId/comms',    clientCommunicationLogRoutes);
+router.use('/clients/:clientId/packages', packageRoutes);
+router.use('/clients/:clientId/dockets',    docketRoutes);
+router.use('/clients/:clientId/documents',  clientDocumentRoutes);
 
 // ── Task management module ────────────────────────────────────────────────────
 router.use('/tasks',                                          taskRoutes);
@@ -45,5 +54,10 @@ router.use('/tasks/:taskId/subtasks',                         subTaskRoutes);
 router.use('/performance',                                    performanceRoutes);
 router.use('/comments',                                       commentRoutes);
 router.use('/notifications',                                  notificationRoutes);
+
+// ── Package / Docket / Service module ────────────────────────────────────────
+router.use('/services',  serviceRoutes);
+router.use('/packages',  packageItemRoutes);
+router.use('/dockets',   docketItemRoutes);
 
 module.exports = router;

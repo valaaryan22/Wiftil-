@@ -26,7 +26,7 @@ async function createClient({ requestingUser, data, req }) {
     phone, whatsappNumber, email, billingDate, industry,
     website, gst, joinedDate, locationPreference, leadSource,
     referralSource, preferredLanguage, preferredChannel,
-    internalTags, socialMediaLinks, logo
+    internalTags, socialMediaLinks, logo, brandDna
   } = data;
 
   if (clientCode) {
@@ -52,7 +52,7 @@ async function createClient({ requestingUser, data, req }) {
     phone, whatsappNumber, email, billingDate, industry,
     website, gst, joinedDate, locationPreference, leadSource,
     referralSource, preferredLanguage, preferredChannel,
-    internalTags, socialMediaLinks, logo,
+    internalTags, socialMediaLinks, logo, brandDna,
     createdById: requestingUser.id,
   });
 
@@ -162,7 +162,7 @@ async function updateClient({ requestingUser, id, data, req }) {
     'phone', 'whatsappNumber', 'email', 'billingDate', 'industry',
     'website', 'gst', 'joinedDate', 'locationPreference', 'leadSource',
     'referralSource', 'preferredLanguage', 'preferredChannel',
-    'internalTags', 'socialMediaLinks', 'logo'
+    'internalTags', 'socialMediaLinks', 'logo', 'brandDna'
   ];
 
   updateFields.forEach(field => {

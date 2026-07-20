@@ -41,6 +41,10 @@ const RATING_MAX_LEVEL          = 3; // Level ≤ 3 (MANAGER+) rates performance
 // Client permissions
 const CLIENT_MANAGE_MAX_LEVEL   = 3; // Level ≤ 3 (MANAGER+) can create/update/delete clients
 
+// Package / Docket / Ticket permissions
+const PACKAGE_MANAGE_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can manage packages, dockets, add-ons
+const ADDON_APPROVE_MAX_LEVEL   = 3; // Level ≤ 3 (MANAGER+) can approve/reject add-ons
+
 // ─── Legacy aliases (kept so old call-sites compile without mass-rename) ─────────
 // These point to the same constants under the old names.
 const LEAVE_APPROVAL_MIN_LEVEL  = LEAVE_APPROVAL_MAX_LEVEL;
@@ -125,13 +129,18 @@ const HTTP_STATUS = Object.freeze({
 });
 
 const AUDIT_CATEGORY = Object.freeze({
-  USER:   'USER',
-  ROLE:   'ROLE',
-  LEAVE:  'LEAVE',
-  AUTH:   'AUTH',
-  TASK:   'TASK',
-  CLIENT: 'CLIENT',
-  SYSTEM: 'SYSTEM',
+  USER:    'USER',
+  ROLE:    'ROLE',
+  LEAVE:   'LEAVE',
+  AUTH:    'AUTH',
+  TASK:    'TASK',
+  CLIENT:  'CLIENT',
+  SYSTEM:  'SYSTEM',
+  PACKAGE: 'PACKAGE',
+  DOCKET:  'DOCKET',
+  TICKET:  'TICKET',
+  ADDON:   'ADDON',
+  SERVICE: 'SERVICE',
 });
 
 const AUDIT_ACTION = Object.freeze({
@@ -202,6 +211,34 @@ const AUDIT_ACTION = Object.freeze({
   CLIENT_COMM_LOGGED:    'CLIENT_COMM_LOGGED',
   CLIENT_COMM_UPDATED:   'CLIENT_COMM_UPDATED',
   CLIENT_COMM_DELETED:   'CLIENT_COMM_DELETED',
+  // Service Catalog
+  SERVICE_CREATED:       'SERVICE_CREATED',
+  SERVICE_UPDATED:       'SERVICE_UPDATED',
+  SERVICE_DELETED:       'SERVICE_DELETED',
+  // Client Packages
+  PACKAGE_CREATED:       'PACKAGE_CREATED',
+  PACKAGE_UPDATED:       'PACKAGE_UPDATED',
+  PACKAGE_DELETED:       'PACKAGE_DELETED',
+  PACKAGE_SERVICE_ADDED: 'PACKAGE_SERVICE_ADDED',
+  PACKAGE_SERVICE_UPDATED: 'PACKAGE_SERVICE_UPDATED',
+  PACKAGE_SERVICE_REMOVED: 'PACKAGE_SERVICE_REMOVED',
+  // Add-ons
+  ADDON_REQUESTED:       'ADDON_REQUESTED',
+  ADDON_APPROVED:        'ADDON_APPROVED',
+  ADDON_REJECTED:        'ADDON_REJECTED',
+  ADDON_DELIVERED:       'ADDON_DELIVERED',
+  ADDON_BILLED:          'ADDON_BILLED',
+  ADDON_DELETED:         'ADDON_DELETED',
+  // Dockets
+  DOCKET_CREATED:        'DOCKET_CREATED',
+  DOCKET_UPDATED:        'DOCKET_UPDATED',
+  DOCKET_DELETED:        'DOCKET_DELETED',
+  // Docket Tickets
+  TICKET_CREATED:        'TICKET_CREATED',
+  TICKET_UPDATED:        'TICKET_UPDATED',
+  TICKET_DELETED:        'TICKET_DELETED',
+  TICKET_RESOLVED:       'TICKET_RESOLVED',
+  TICKET_CLOSED:         'TICKET_CLOSED',
 });
 
 module.exports = {
@@ -218,6 +255,8 @@ module.exports = {
   SUBTASK_CREATE_MAX_LEVEL,
   RATING_MAX_LEVEL,
   CLIENT_MANAGE_MAX_LEVEL,
+  PACKAGE_MANAGE_MAX_LEVEL,
+  ADDON_APPROVE_MAX_LEVEL,
   // Legacy aliases (backward-compat)
   LEAVE_APPROVAL_MIN_LEVEL,
   USER_INVITE_MIN_LEVEL,

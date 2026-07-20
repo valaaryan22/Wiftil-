@@ -104,6 +104,21 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING(255),
       allowNull: true,
     },
+    brandDna: {
+      // Client DNA / Brand Knowledge Base
+      // Structure:
+      // {
+      //   brandColors: [ { name: "Signature Orange", hex: "#F26522" }, ... ],
+      //   toneOfVoice: "Assured, expert, calm, patient-friendly, premium, outcome-led.",
+      //   visualRules: "Keep layouts clean, use orange for CTA emphasis...",
+      //   dos: ["Lead with treatment outcome or trust signal", ...],
+      //   donts: ["Avoid cluttered compositions", ...]
+      // }
+      type: DataTypes.JSON,
+      allowNull: true,
+      field: 'brand_dna',
+      defaultValue: null,
+    },
     createdById: {
       type: DataTypes.UUID,
       allowNull: false,
@@ -150,6 +165,18 @@ module.exports = (sequelize, DataTypes) => {
     Client.hasMany(models.ClientCommunicationLog, {
       foreignKey: 'client_id',
       as: 'communicationLogs',
+    });
+    Client.hasMany(models.ClientPackage, {
+      foreignKey: 'client_id',
+      as: 'packages',
+    });
+    Client.hasMany(models.Docket, {
+      foreignKey: 'client_id',
+      as: 'dockets',
+    });
+    Client.hasMany(models.ClientDocument, {
+      foreignKey: 'client_id',
+      as: 'documents',
     });
   };
 
