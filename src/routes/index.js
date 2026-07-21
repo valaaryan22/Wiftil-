@@ -22,6 +22,7 @@ const packageItemRoutes  = require('./packageItem.routes');
 const docketRoutes       = require('./docket.routes');
 const docketItemRoutes   = require('./docketItem.routes');
 const clientDocumentRoutes = require('./clientDocument.routes');
+const clientPaymentRoutes  = require('./clientPayment.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -47,6 +48,7 @@ router.use('/clients/:clientId/comms',    clientCommunicationLogRoutes);
 router.use('/clients/:clientId/packages', packageRoutes);
 router.use('/clients/:clientId/dockets',    docketRoutes);
 router.use('/clients/:clientId/documents',  clientDocumentRoutes);
+router.use('/clients/:clientId/payments',   clientPaymentRoutes);
 
 // ── Task management module ────────────────────────────────────────────────────
 router.use('/tasks',                                          taskRoutes);

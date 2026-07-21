@@ -1,0 +1,666 @@
+'use strict';
+
+const { Op } = require('sequelize');
+const { db } = require('../database/client');
+const { writeAuditLog } = require('../utils/auditLog');
+const {
+  HTTP_STATUS,
+  AUDIT_CATEGORY,
+  AUDIT_ACTION,
+  CLIENT_MANAGE_MAX_LEVEL,
+  PAYMENT_MANAGE_MAX_LEVEL,
+} = require('../constants');
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function assertLevel(user, maxLevel, msg) {
+  if (user.roleLevel > maxLevel) {
+    const err = new Error(msg || `Access level ≤ ${maxLevel} required`);
+    err.statusCode = HTTP_STATUS.FORBIDDEN;
+    throw err;
+  }
+}
+
+function notFound(msg) {
+  const err = new Error(msg);
+  err.statusCode = HTTP_STATUS.NOT_FOUND;
+  return err;
+}
+
+function badRequest(msg) {
+  const err = new Error(msg);
+  err.statusCode = HTTP_STATUS.BAD_REQUEST;
+  return err;
+}
+
+const PAYMENT_INCLUDE = [
+  { model: db.User, as: 'createdBy',    attributes: ['id', 'firstName', 'lastName'] },
+  { model: db.User, as: 'collectedBy',  attributes: ['id', 'firstName', 'lastName'] },
+  { model: db.User, as: 'approvedBy',   attributes: ['id', 'firstName', 'lastName'] },
+  {
+    model: db.ClientPackage, as: 'package',
+    attributes: ['id', 'name', 'packageType', 'billingCycle'],
+    required: false,
+  },
+];
+
+// For invoice → payments breakdown
+const INVOICE_INCLUDE = [
+  ...PAYMENT_INCLUDE,
+  {
+    model: db.ClientPayment, as: 'paymentEntries',
+    required: false,
+    include: [
+      { model: db.User, as: 'collectedBy', attributes: ['id', 'firstName', 'lastName'] },
+    ],
+  },
+];
+
+// ── Validate client exists ────────────────────────────────────────────────────
+
+async function assertClient(clientId) {
+  const client = await db.Client.findOne({ where: { id: clientId, deletedAt: null } });
+  if (!client) throw notFound('Client not found');
+  return client;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CREATE INVOICE
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function createInvoice({ requestingUser, clientId, data, req }) {
+  assertLevel(requestingUser, PAYMENT_MANAGE_MAX_LEVEL, 'Manager+ required to create invoices');
+  const client = await assertClient(clientId);
+
+  const {
+    packageId, invoiceNumber, invoiceDate, dueDate, description,
+    amount, taxAmount, taxRate, discountAmount, penaltyAmount,
+    lineItems, internalNotes, currency,
+  } = data;
+
+  const record = await db.ClientPayment.create({
+    clientId,
+    packageId: packageId || null,
+    createdById: requestingUser.id,
+    paymentType: 'INVOICE',
+    status: 'DRAFT',
+    invoiceNumber: invoiceNumber || null,
+    invoiceDate: invoiceDate || new Date(),
+    dueDate: dueDate || null,
+    description, internalNotes,
+    amount:         parseFloat(amount         || 0),
+    taxAmount:      parseFloat(taxAmount      || 0),
+    taxRate:        taxRate    ? parseFloat(taxRate)    : null,
+    discountAmount: parseFloat(discountAmount || 0),
+    penaltyAmount:  parseFloat(penaltyAmount  || 0),
+    paidAmount:     0,
+    lineItems:      lineItems  || null,
+    currency:       currency   || 'INR',
+  });
+
+  const full = await db.ClientPayment.findByPk(record.id, { include: INVOICE_INCLUDE });
+
+  await writeAuditLog({
+    performedBy: requestingUser,
+    action: AUDIT_ACTION.PAYMENT_INVOICE_CREATED,
+    category: AUDIT_CATEGORY.PAYMENT,
+    entity: 'ClientPayment',
+    entityId: record.id,
+    entityName: record.invoiceNumber,
+    description: `Invoice "${record.invoiceNumber}" created for client "${client.name}" — ₹${record.totalAmount}`,
+    newValues: record.toJSON(),
+    req,
+  });
+
+  return full;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RECORD PAYMENT (against invoice or standalone)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function recordPayment({ requestingUser, clientId, data, req }) {
+  const client = await assertClient(clientId);
+
+  const {
+    parentInvoiceId, packageId, paymentMode, amount,
+    taxAmount, currency, paidDate, referenceNumber,
+    description, internalNotes, collectedById,
+  } = data;
+
+  if (!amount || parseFloat(amount) <= 0) throw badRequest('Payment amount must be > 0');
+
+  // If linked to an invoice, validate it belongs to this client
+  let invoice = null;
+  if (parentInvoiceId) {
+    invoice = await db.ClientPayment.findOne({
+      where: { id: parentInvoiceId, clientId, paymentType: 'INVOICE', deletedAt: null },
+    });
+    if (!invoice) throw notFound('Invoice not found for this client');
+
+    const TERMINAL = ['PAID', 'CANCELLED', 'WRITTEN_OFF'];
+    if (TERMINAL.includes(invoice.status)) {
+      throw badRequest(`Invoice is already ${invoice.status} — cannot record more payments`);
+    }
+  }
+
+  const record = await db.ClientPayment.create({
+    clientId,
+    packageId:       packageId       || (invoice ? invoice.packageId : null),
+    parentInvoiceId: parentInvoiceId || null,
+    createdById:     requestingUser.id,
+    collectedById:   collectedById   || requestingUser.id,
+    paymentType:     'PAYMENT',
+    status:          'PAID',
+    paymentMode:     paymentMode || null,
+    currency:        currency    || 'INR',
+    amount:          parseFloat(amount),
+    taxAmount:       parseFloat(taxAmount || 0),
+    paidAmount:      parseFloat(amount),
+    paidDate:        paidDate || new Date(),
+    referenceNumber: referenceNumber || null,
+    description, internalNotes,
+  });
+
+  // Update parent invoice paid/balance amounts and status
+  if (invoice) {
+    const newPaid    = parseFloat(invoice.paidAmount) + parseFloat(amount);
+    const newBalance = parseFloat(invoice.totalAmount) - newPaid;
+    let newStatus    = invoice.status;
+
+    if (newBalance <= 0)           newStatus = 'PAID';
+    else if (newPaid > 0)          newStatus = 'PARTIALLY_PAID';
+
+    await invoice.update({
+      paidAmount:    parseFloat(newPaid.toFixed(2)),
+      balanceAmount: parseFloat(Math.max(newBalance, 0).toFixed(2)),
+      status:        newStatus,
+      paidDate:      newStatus === 'PAID' ? (paidDate || new Date()) : invoice.paidDate,
+    });
+  }
+
+  const full = await db.ClientPayment.findByPk(record.id, { include: PAYMENT_INCLUDE });
+
+  await writeAuditLog({
+    performedBy: requestingUser,
+    action: AUDIT_ACTION.PAYMENT_RECEIVED,
+    category: AUDIT_CATEGORY.PAYMENT,
+    entity: 'ClientPayment',
+    entityId: record.id,
+    entityName: record.referenceNumber || record.id,
+    description: `Payment of ₹${record.amount} received from client "${client.name}"${invoice ? ` against invoice ${invoice.invoiceNumber}` : ''}`,
+    newValues: record.toJSON(),
+    req,
+  });
+
+  return full;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RECORD ADVANCE
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function recordAdvance({ requestingUser, clientId, data, req }) {
+  const client = await assertClient(clientId);
+
+  const {
+    amount, paymentMode, currency, paidDate,
+    referenceNumber, description, internalNotes, packageId, collectedById,
+  } = data;
+
+  if (!amount || parseFloat(amount) <= 0) throw badRequest('Advance amount must be > 0');
+
+  const record = await db.ClientPayment.create({
+    clientId,
+    packageId:     packageId     || null,
+    createdById:   requestingUser.id,
+    collectedById: collectedById || requestingUser.id,
+    paymentType:   'ADVANCE',
+    status:        'PAID',
+    paymentMode:   paymentMode || null,
+    currency:      currency    || 'INR',
+    amount:        parseFloat(amount),
+    paidAmount:    parseFloat(amount),
+    paidDate:      paidDate || new Date(),
+    referenceNumber: referenceNumber || null,
+    description, internalNotes,
+  });
+
+  await writeAuditLog({
+    performedBy: requestingUser,
+    action: AUDIT_ACTION.PAYMENT_ADVANCE_RECORDED,
+    category: AUDIT_CATEGORY.PAYMENT,
+    entity: 'ClientPayment',
+    entityId: record.id,
+    entityName: record.referenceNumber || record.id,
+    description: `Advance of ₹${record.amount} received from client "${client.name}"`,
+    newValues: record.toJSON(),
+    req,
+  });
+
+  return db.ClientPayment.findByPk(record.id, { include: PAYMENT_INCLUDE });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK INVOICE AS SENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function markInvoiceSent({ requestingUser, clientId, paymentId, req }) {
+  assertLevel(requestingUser, PAYMENT_MANAGE_MAX_LEVEL, 'Manager+ required');
+  const record = await _findPayment(paymentId, clientId, 'INVOICE');
+
+  if (!['DRAFT'].includes(record.status)) throw badRequest(`Cannot mark ${record.status} invoice as SENT`);
+
+  await record.update({ status: 'SENT', sentAt: new Date() });
+
+  await writeAuditLog({
+    performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_INVOICE_SENT,
+    category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
+    entityId: record.id, entityName: record.invoiceNumber,
+    description: `Invoice "${record.invoiceNumber}" marked as SENT`,
+    req,
+  });
+
+  return db.ClientPayment.findByPk(record.id, { include: INVOICE_INCLUDE });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK INVOICE OVERDUE
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function markInvoiceOverdue({ requestingUser, clientId, paymentId, req }) {
+  assertLevel(requestingUser, PAYMENT_MANAGE_MAX_LEVEL, 'Manager+ required');
+  const record = await _findPayment(paymentId, clientId, 'INVOICE');
+
+  const ALLOWABLE = ['SENT', 'PARTIALLY_PAID'];
+  if (!ALLOWABLE.includes(record.status)) throw badRequest(`Cannot mark ${record.status} invoice as OVERDUE`);
+
+  await record.update({ status: 'OVERDUE' });
+
+  await writeAuditLog({
+    performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_OVERDUE,
+    category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
+    entityId: record.id, entityName: record.invoiceNumber,
+    description: `Invoice "${record.invoiceNumber}" marked OVERDUE`,
+    req,
+  });
+
+  return db.ClientPayment.findByPk(record.id, { include: INVOICE_INCLUDE });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RAISE DISPUTE
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function raiseDispute({ requestingUser, clientId, paymentId, data, req }) {
+  const record = await _findPayment(paymentId, clientId, 'INVOICE');
+
+  const TERMINAL = ['PAID', 'CANCELLED', 'WRITTEN_OFF'];
+  if (TERMINAL.includes(record.status)) throw badRequest(`Cannot dispute a ${record.status} invoice`);
+
+  const { disputeReason } = data;
+  if (!disputeReason || !disputeReason.trim()) throw badRequest('disputeReason is required');
+
+  await record.update({ status: 'DISPUTED', disputeReason: disputeReason.trim(), disputeRaisedAt: new Date() });
+
+  await writeAuditLog({
+    performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_DISPUTED,
+    category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
+    entityId: record.id, entityName: record.invoiceNumber,
+    description: `Dispute raised on invoice "${record.invoiceNumber}": ${disputeReason}`,
+    req,
+  });
+
+  return db.ClientPayment.findByPk(record.id, { include: INVOICE_INCLUDE });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESOLVE DISPUTE
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function resolveDispute({ requestingUser, clientId, paymentId, req }) {
+  assertLevel(requestingUser, PAYMENT_MANAGE_MAX_LEVEL, 'Manager+ required to resolve disputes');
+  const record = await _findPayment(paymentId, clientId, 'INVOICE');
+  if (record.status !== 'DISPUTED') throw badRequest('Invoice is not in DISPUTED status');
+
+  const resolvedStatus = parseFloat(record.balanceAmount) <= 0 ? 'PAID' : (parseFloat(record.paidAmount) > 0 ? 'PARTIALLY_PAID' : 'SENT');
+  await record.update({ status: resolvedStatus, disputeResolvedAt: new Date() });
+
+  await writeAuditLog({
+    performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_DISPUTE_RESOLVED,
+    category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
+    entityId: record.id, entityName: record.invoiceNumber,
+    description: `Dispute resolved on invoice "${record.invoiceNumber}", status → ${resolvedStatus}`,
+    req,
+  });
+
+  return db.ClientPayment.findByPk(record.id, { include: INVOICE_INCLUDE });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APPROVE PAYMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function approvePayment({ requestingUser, clientId, paymentId, req }) {
+  assertLevel(requestingUser, PAYMENT_MANAGE_MAX_LEVEL, 'Manager+ required to approve payments');
+  const record = await db.ClientPayment.findOne({
+    where: { id: paymentId, clientId, deletedAt: null },
+  });
+  if (!record) throw notFound('Payment record not found');
+
+  await record.update({ approvedById: requestingUser.id, approvedAt: new Date() });
+
+  await writeAuditLog({
+    performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_APPROVED,
+    category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
+    entityId: record.id, entityName: record.invoiceNumber || record.id,
+    description: `Payment record approved by ${requestingUser.firstName}`,
+    req,
+  });
+
+  return db.ClientPayment.findByPk(record.id, { include: PAYMENT_INCLUDE });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CANCEL INVOICE / WRITE-OFF
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function cancelInvoice({ requestingUser, clientId, paymentId, req }) {
+  assertLevel(requestingUser, PAYMENT_MANAGE_MAX_LEVEL, 'Manager+ required');
+  const record = await _findPayment(paymentId, clientId, 'INVOICE');
+
+  const CANCELLABLE = ['DRAFT', 'SENT', 'OVERDUE', 'DISPUTED'];
+  if (!CANCELLABLE.includes(record.status)) throw badRequest(`Cannot cancel a ${record.status} invoice`);
+
+  await record.update({ status: 'CANCELLED' });
+
+  await writeAuditLog({
+    performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_CANCELLED,
+    category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
+    entityId: record.id, entityName: record.invoiceNumber,
+    description: `Invoice "${record.invoiceNumber}" cancelled`,
+    req,
+  });
+
+  return db.ClientPayment.findByPk(record.id, { include: INVOICE_INCLUDE });
+}
+
+async function writeOffInvoice({ requestingUser, clientId, paymentId, req }) {
+  assertLevel(requestingUser, CLIENT_MANAGE_MAX_LEVEL, 'Manager+ required to write off invoices');
+  const record = await _findPayment(paymentId, clientId, 'INVOICE');
+
+  const WRITABLE = ['SENT', 'PARTIALLY_PAID', 'OVERDUE', 'DISPUTED'];
+  if (!WRITABLE.includes(record.status)) throw badRequest(`Cannot write off a ${record.status} invoice`);
+
+  await record.update({ status: 'WRITTEN_OFF' });
+
+  await writeAuditLog({
+    performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_WRITTEN_OFF,
+    category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
+    entityId: record.id, entityName: record.invoiceNumber,
+    description: `Invoice "${record.invoiceNumber}" written off`,
+    req,
+  });
+
+  return db.ClientPayment.findByPk(record.id, { include: INVOICE_INCLUDE });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOG FOLLOW-UP
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function logFollowUp({ requestingUser, clientId, paymentId, data, req }) {
+  const record = await _findPayment(paymentId, clientId, 'INVOICE');
+
+  const { nextFollowUpDate, internalNotes } = data;
+  const updates = {
+    followUpCount: record.followUpCount + 1,
+  };
+  if (nextFollowUpDate) updates.nextFollowUpDate = nextFollowUpDate;
+  if (internalNotes)    updates.internalNotes    = internalNotes;
+
+  await record.update(updates);
+
+  await writeAuditLog({
+    performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_FOLLOW_UP,
+    category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
+    entityId: record.id, entityName: record.invoiceNumber,
+    description: `Follow-up #${updates.followUpCount} logged on invoice "${record.invoiceNumber}"`,
+    req,
+  });
+
+  return db.ClientPayment.findByPk(record.id, { include: INVOICE_INCLUDE });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ISSUE CREDIT NOTE / REFUND
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function issueCreditNote({ requestingUser, clientId, data, req }) {
+  assertLevel(requestingUser, PAYMENT_MANAGE_MAX_LEVEL, 'Manager+ required');
+  const client = await assertClient(clientId);
+
+  const { amount, description, internalNotes, parentInvoiceId, packageId, currency } = data;
+  if (!amount || parseFloat(amount) <= 0) throw badRequest('Credit note amount must be > 0');
+
+  const record = await db.ClientPayment.create({
+    clientId,
+    packageId:       packageId       || null,
+    parentInvoiceId: parentInvoiceId || null,
+    createdById:     requestingUser.id,
+    paymentType:     'CREDIT_NOTE',
+    status:          'PAID',
+    currency:        currency || 'INR',
+    amount:          parseFloat(amount),
+    paidAmount:      parseFloat(amount),
+    description, internalNotes,
+  });
+
+  await writeAuditLog({
+    performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_CREDIT_NOTE,
+    category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
+    entityId: record.id, entityName: record.id,
+    description: `Credit note of ₹${amount} issued for client "${client.name}"`,
+    newValues: record.toJSON(), req,
+  });
+
+  return db.ClientPayment.findByPk(record.id, { include: PAYMENT_INCLUDE });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LIST PAYMENTS / INVOICES
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function getPayments({
+  clientId,
+  page = 1, limit = 20,
+  search, paymentType, status, paymentMode,
+  fromDate, toDate, packageId,
+  sortBy, sortOrder,
+}) {
+  page  = parseInt(page)  || 1;
+  limit = parseInt(limit) || 20;
+
+  const where = { clientId, deletedAt: null };
+  if (paymentType) where.paymentType = paymentType;
+  if (status)      where.status      = status;
+  if (paymentMode) where.paymentMode = paymentMode;
+  if (packageId)   where.packageId   = packageId;
+
+  if (fromDate || toDate) {
+    where.invoiceDate = {};
+    if (fromDate) where.invoiceDate[Op.gte] = fromDate;
+    if (toDate)   where.invoiceDate[Op.lte] = toDate;
+  }
+
+  if (search) {
+    where[Op.or] = [
+      { invoiceNumber:   { [Op.like]: `%${search}%` } },
+      { referenceNumber: { [Op.like]: `%${search}%` } },
+      { description:     { [Op.like]: `%${search}%` } },
+    ];
+  }
+
+  const SORT_COLS = ['invoiceDate', 'dueDate', 'paidDate', 'amount', 'totalAmount', 'created_at', 'status'];
+  const col = SORT_COLS.includes(sortBy) ? sortBy : 'created_at';
+  const dir = sortOrder === 'ASC' ? 'ASC' : 'DESC';
+
+  const { count: total, rows: payments } = await db.ClientPayment.findAndCountAll({
+    where,
+    include: PAYMENT_INCLUDE,
+    offset: (page - 1) * limit,
+    limit,
+    order: [[col, dir]],
+    distinct: true,
+  });
+
+  return { payments, total, page, limit };
+}
+
+async function getPaymentById({ clientId, paymentId }) {
+  const record = await db.ClientPayment.findOne({
+    where: { id: paymentId, clientId, deletedAt: null },
+    include: INVOICE_INCLUDE,
+  });
+  if (!record) throw notFound('Payment record not found');
+  return record;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UPDATE PAYMENT (general field update for DRAFT invoices)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function updatePayment({ requestingUser, clientId, paymentId, data, req }) {
+  assertLevel(requestingUser, PAYMENT_MANAGE_MAX_LEVEL, 'Manager+ required');
+  const record = await db.ClientPayment.findOne({
+    where: { id: paymentId, clientId, deletedAt: null },
+  });
+  if (!record) throw notFound('Payment record not found');
+
+  // Only DRAFT invoices can be freely edited
+  if (record.paymentType === 'INVOICE' && record.status !== 'DRAFT') {
+    throw badRequest('Only DRAFT invoices can be fully edited. Use specific workflow actions for other statuses.');
+  }
+
+  const EDITABLE = [
+    'invoiceDate', 'dueDate', 'description', 'internalNotes',
+    'amount', 'taxAmount', 'taxRate', 'discountAmount', 'penaltyAmount',
+    'lineItems', 'attachments', 'currency', 'referenceNumber',
+    'paymentMode', 'paidDate', 'dueDate', 'nextFollowUpDate',
+  ];
+
+  const oldValues = record.toJSON();
+  EDITABLE.forEach(f => { if (data[f] !== undefined) record[f] = data[f]; });
+
+  await record.save();
+  const full = await db.ClientPayment.findByPk(record.id, { include: INVOICE_INCLUDE });
+
+  await writeAuditLog({
+    performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_UPDATED,
+    category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
+    entityId: record.id, entityName: record.invoiceNumber || record.id,
+    description: `Payment record updated`,
+    oldValues, newValues: full.toJSON(), req,
+  });
+
+  return full;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE (soft)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function deletePayment({ requestingUser, clientId, paymentId, req }) {
+  assertLevel(requestingUser, CLIENT_MANAGE_MAX_LEVEL, 'Manager+ required to delete payment records');
+
+  const record = await db.ClientPayment.findOne({
+    where: { id: paymentId, clientId, deletedAt: null },
+  });
+  if (!record) throw notFound('Payment record not found');
+
+  if (['PAID', 'PARTIALLY_PAID'].includes(record.status)) {
+    throw badRequest('Cannot delete a paid or partially-paid record. Issue a credit note or write-off instead.');
+  }
+
+  await record.update({ deletedAt: new Date() });
+
+  await writeAuditLog({
+    performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_DELETED,
+    category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
+    entityId: record.id, entityName: record.invoiceNumber || record.id,
+    description: `Payment record "${record.invoiceNumber || record.id}" deleted`,
+    req,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUMMARY / OUTSTANDING REPORT
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function getPaymentSummary({ clientId }) {
+  await assertClient(clientId);
+
+  const rows = await db.ClientPayment.findAll({
+    where: { clientId, paymentType: 'INVOICE', deletedAt: null },
+    attributes: [
+      'status',
+      [db.sequelize.fn('COUNT', db.sequelize.col('id')), 'count'],
+      [db.sequelize.fn('SUM', db.sequelize.col('total_amount')), 'totalInvoiced'],
+      [db.sequelize.fn('SUM', db.sequelize.col('paid_amount')),  'totalPaid'],
+      [db.sequelize.fn('SUM', db.sequelize.col('balance_amount')), 'totalBalance'],
+    ],
+    group: ['status'],
+    raw: true,
+  });
+
+  // Advances collected
+  const advanceRow = await db.ClientPayment.findOne({
+    where: { clientId, paymentType: 'ADVANCE', deletedAt: null },
+    attributes: [
+      [db.sequelize.fn('SUM', db.sequelize.col('amount')), 'totalAdvance'],
+    ],
+    raw: true,
+  });
+
+  return {
+    byStatus: rows,
+    totalAdvanceReceived: parseFloat(advanceRow?.totalAdvance || 0),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INTERNAL helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function _findPayment(paymentId, clientId, requiredType) {
+  const record = await db.ClientPayment.findOne({
+    where: { id: paymentId, clientId, deletedAt: null },
+  });
+  if (!record) throw notFound('Payment record not found');
+  if (requiredType && record.paymentType !== requiredType) {
+    throw badRequest(`Expected a ${requiredType} record, got ${record.paymentType}`);
+  }
+  return record;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+module.exports = {
+  createInvoice,
+  recordPayment,
+  recordAdvance,
+  issueCreditNote,
+  markInvoiceSent,
+  markInvoiceOverdue,
+  raiseDispute,
+  resolveDispute,
+  approvePayment,
+  cancelInvoice,
+  writeOffInvoice,
+  logFollowUp,
+  getPayments,
+  getPaymentById,
+  updatePayment,
+  deletePayment,
+  getPaymentSummary,
+};

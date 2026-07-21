@@ -43,6 +43,9 @@ const CLIENT_MANAGE_MAX_LEVEL   = 3; // Level ≤ 3 (MANAGER+) can create/update
 
 // Package / Docket / Ticket permissions
 const PACKAGE_MANAGE_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can manage packages, dockets, add-ons
+
+// Payment collection permissions
+const PAYMENT_MANAGE_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can create invoices, approve payments, cancel
 const ADDON_APPROVE_MAX_LEVEL   = 3; // Level ≤ 3 (MANAGER+) can approve/reject add-ons
 
 // ─── Legacy aliases (kept so old call-sites compile without mass-rename) ─────────
@@ -141,6 +144,7 @@ const AUDIT_CATEGORY = Object.freeze({
   TICKET:  'TICKET',
   ADDON:   'ADDON',
   SERVICE: 'SERVICE',
+  PAYMENT: 'PAYMENT',
 });
 
 const AUDIT_ACTION = Object.freeze({
@@ -239,6 +243,21 @@ const AUDIT_ACTION = Object.freeze({
   TICKET_DELETED:        'TICKET_DELETED',
   TICKET_RESOLVED:       'TICKET_RESOLVED',
   TICKET_CLOSED:         'TICKET_CLOSED',
+  // Payments
+  PAYMENT_INVOICE_CREATED: 'PAYMENT_INVOICE_CREATED',
+  PAYMENT_INVOICE_SENT:    'PAYMENT_INVOICE_SENT',
+  PAYMENT_RECEIVED:        'PAYMENT_RECEIVED',
+  PAYMENT_ADVANCE_RECORDED:'PAYMENT_ADVANCE_RECORDED',
+  PAYMENT_CREDIT_NOTE:     'PAYMENT_CREDIT_NOTE',
+  PAYMENT_APPROVED:        'PAYMENT_APPROVED',
+  PAYMENT_OVERDUE:         'PAYMENT_OVERDUE',
+  PAYMENT_DISPUTED:        'PAYMENT_DISPUTED',
+  PAYMENT_DISPUTE_RESOLVED:'PAYMENT_DISPUTE_RESOLVED',
+  PAYMENT_CANCELLED:       'PAYMENT_CANCELLED',
+  PAYMENT_WRITTEN_OFF:     'PAYMENT_WRITTEN_OFF',
+  PAYMENT_FOLLOW_UP:       'PAYMENT_FOLLOW_UP',
+  PAYMENT_UPDATED:         'PAYMENT_UPDATED',
+  PAYMENT_DELETED:         'PAYMENT_DELETED',
 });
 
 module.exports = {
@@ -256,6 +275,7 @@ module.exports = {
   RATING_MAX_LEVEL,
   CLIENT_MANAGE_MAX_LEVEL,
   PACKAGE_MANAGE_MAX_LEVEL,
+  PAYMENT_MANAGE_MAX_LEVEL,
   ADDON_APPROVE_MAX_LEVEL,
   // Legacy aliases (backward-compat)
   LEAVE_APPROVAL_MIN_LEVEL,

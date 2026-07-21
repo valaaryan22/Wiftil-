@@ -178,6 +178,10 @@ module.exports = (sequelize, DataTypes) => {
       foreignKey: 'client_id',
       as: 'documents',
     });
+    Client.hasMany(models.ClientPayment, {
+      foreignKey: 'client_id',
+      as: 'payments',
+    });
   };
 
   return Client;

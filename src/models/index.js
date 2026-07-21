@@ -49,6 +49,8 @@ const modelFiles = [
   require('./DocketTicket.js')(sequelize, Sequelize.DataTypes),
   // Client Documents module
   require('./ClientDocument.js')(sequelize, Sequelize.DataTypes),
+  // Client Payment module
+  require('./ClientPayment.js')(sequelize, Sequelize.DataTypes),
 ];
 
 modelFiles.forEach(model => {
