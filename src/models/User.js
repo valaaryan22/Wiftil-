@@ -203,6 +203,18 @@ module.exports = (sequelize, DataTypes) => {
       foreignKey: 'user_id',
       as: 'notifications',
     });
+    User.hasMany(models.DocketManager, {
+      foreignKey: 'manager_id',
+      as: 'docketManagements',
+    });
+    User.hasMany(models.DocketManager, {
+      foreignKey: 'assigned_by_id',
+      as: 'docketManagerAssignedBy',
+    });
+    User.hasMany(models.Docket, {
+      foreignKey: 'published_by_id',
+      as: 'publishedDockets',
+    });
   };
 
   return User;

@@ -70,6 +70,12 @@ module.exports = (sequelize, DataTypes) => {
       field: 'manager_id',
       references: { model: 'users', key: 'id' },
     },
+    docketId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: 'docket_id',
+      references: { model: 'dockets', key: 'id' },
+    },
     managerRemark: {
       type: DataTypes.TEXT,
       allowNull: true,
@@ -122,6 +128,7 @@ module.exports = (sequelize, DataTypes) => {
       { fields: ['manager_id'] },
       { fields: ['created_by_id'] },
       { fields: ['due_date'] },
+      { fields: ['docket_id'] },
     ],
   });
 
@@ -133,6 +140,10 @@ module.exports = (sequelize, DataTypes) => {
     Task.belongsTo(models.User, {
       foreignKey: 'manager_id',
       as: 'manager',
+    });
+    Task.belongsTo(models.Docket, {
+      foreignKey: 'docket_id',
+      as: 'docket',
     });
     Task.hasMany(models.TaskAssignment, {
       foreignKey: 'task_id',

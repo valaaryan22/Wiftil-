@@ -16,6 +16,12 @@ module.exports = (sequelize, DataTypes) => {
       field: 'task_id',
       references: { model: 'tasks', key: 'id' },
     },
+    docketId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: 'docket_id',
+      references: { model: 'dockets', key: 'id' },
+    },
     title: {
       type: DataTypes.STRING(255),
       allowNull: false,
@@ -118,6 +124,7 @@ module.exports = (sequelize, DataTypes) => {
       { fields: ['task_id'] },
       { fields: ['status'] },
       { fields: ['due_date'] },
+      { fields: ['docket_id'] },
     ],
   });
 
@@ -126,6 +133,10 @@ module.exports = (sequelize, DataTypes) => {
       foreignKey: 'task_id',
       as: 'task',
       onDelete: 'CASCADE',
+    });
+    SubTask.belongsTo(models.Docket, {
+      foreignKey: 'docket_id',
+      as: 'docket',
     });
     SubTask.belongsTo(models.User, {
       foreignKey: 'created_by_id',

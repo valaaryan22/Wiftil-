@@ -119,6 +119,29 @@ module.exports = (sequelize, DataTypes) => {
       field: 'brand_dna',
       defaultValue: null,
     },
+
+    // ── Client Overview / Scoring Fields (Admin-set) ────────────────────────
+    loyaltyScore: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: 'loyalty_score',
+      comment: 'Admin-set loyalty score 0-100',
+      validate: { min: 0, max: 100 },
+    },
+    healthScore: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: 'health_score',
+      comment: 'Admin-set or manually overridden health score 0-100',
+      validate: { min: 0, max: 100 },
+    },
+    relationshipStatus: {
+      type: DataTypes.ENUM('NEW', 'GROWING', 'TRUSTED_PARTNER', 'AT_RISK', 'CHURNED'),
+      allowNull: true,
+      field: 'relationship_status',
+      defaultValue: 'NEW',
+      comment: 'Admin-set relationship tier label',
+    },
     createdById: {
       type: DataTypes.UUID,
       allowNull: false,
@@ -181,6 +204,10 @@ module.exports = (sequelize, DataTypes) => {
     Client.hasMany(models.ClientPayment, {
       foreignKey: 'client_id',
       as: 'payments',
+    });
+    Client.hasMany(models.ClientRisk, {
+      foreignKey: 'client_id',
+      as: 'risks',
     });
   };
 

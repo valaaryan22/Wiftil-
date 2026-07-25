@@ -3,7 +3,11 @@
 const { Op } = require('sequelize');
 const { db } = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
-const { HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION, PACKAGE_MANAGE_MAX_LEVEL } = require('../constants');
+const {
+  HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION,
+  PACKAGE_MANAGE_MAX_LEVEL, DOCKET_MANAGE_MAX_LEVEL,
+  DOCKET_STATUS,
+} = require('../constants');
 
 function assertLevel(user, maxLevel, msg) {
   if (user.roleLevel > maxLevel) {
@@ -13,11 +17,35 @@ function assertLevel(user, maxLevel, msg) {
   }
 }
 
+function notFound(entity) {
+  const err = new Error(`${entity} not found`);
+  err.statusCode = HTTP_STATUS.NOT_FOUND;
+  throw err;
+}
+
+function badRequest(msg) {
+  const err = new Error(msg);
+  err.statusCode = HTTP_STATUS.BAD_REQUEST;
+  throw err;
+}
+
+// ─── Include sets ─────────────────────────────────────────────────────────────
+
+const MANAGER_INCLUDE = {
+  model: db.DocketManager,
+  as: 'managers',
+  include: [
+    { model: db.User, as: 'manager', attributes: ['id', 'firstName', 'lastName', 'email'] },
+    { model: db.User, as: 'assignedBy', attributes: ['id', 'firstName', 'lastName'] },
+  ],
+};
+
 const DOCKET_INCLUDE = [
   { model: db.Client, as: 'client', attributes: ['id', 'name', 'clientCode'] },
   { model: db.ClientPackage, as: 'package', attributes: ['id', 'name', 'packageType', 'status'] },
-  { model: db.User, as: 'assignedManager', attributes: ['id', 'firstName', 'lastName'] },
   { model: db.User, as: 'createdBy', attributes: ['id', 'firstName', 'lastName'] },
+  { model: db.User, as: 'publishedBy', attributes: ['id', 'firstName', 'lastName'] },
+  MANAGER_INCLUDE,
 ];
 
 const TICKET_INCLUDE = [
@@ -33,24 +61,34 @@ async function createDocket({ requestingUser, clientId, data, req }) {
   assertLevel(requestingUser, PACKAGE_MANAGE_MAX_LEVEL, 'Only Manager level or above can create dockets');
 
   const client = await db.Client.findOne({ where: { id: clientId, deletedAt: null } });
-  if (!client) {
-    const err = new Error('Client not found');
-    err.statusCode = HTTP_STATUS.NOT_FOUND;
-    throw err;
-  }
+  if (!client) notFound('Client');
 
-  const { title, description, docketType, isTicketBased, status, startDate, endDate, assignedManagerId, packageId } = data;
+  const {
+    title, description, docketType, isTicketBased,
+    startDate, endDate, packageId, managerIds,
+  } = data;
 
+  // Always create in DRAFT status
   const docket = await db.Docket.create({
     clientId, title, description,
     docketType: docketType || 'PROJECT',
     isTicketBased: isTicketBased !== undefined ? isTicketBased : false,
-    status: status || 'PLANNING',
+    status: 'DRAFT',
     startDate, endDate,
-    assignedManagerId: assignedManagerId || null,
     packageId: packageId || null,
     createdById: requestingUser.id,
   });
+
+  // Assign initial managers if provided
+  if (managerIds && Array.isArray(managerIds) && managerIds.length > 0) {
+    const managerRecords = managerIds.map((mid, idx) => ({
+      docketId: docket.id,
+      managerId: typeof mid === 'object' ? mid.id : mid,
+      role: (typeof mid === 'object' && mid.role) ? mid.role : (idx === 0 ? 'PRIMARY' : 'SECONDARY'),
+      assignedById: requestingUser.id,
+    }));
+    await db.DocketManager.bulkCreate(managerRecords, { ignoreDuplicates: true });
+  }
 
   const full = await db.Docket.findByPk(docket.id, { include: DOCKET_INCLUDE });
 
@@ -61,7 +99,7 @@ async function createDocket({ requestingUser, clientId, data, req }) {
     entity: 'Docket',
     entityId: docket.id,
     entityName: docket.title,
-    description: `Created docket: ${docket.title} for client ${clientId}`,
+    description: `Created docket: ${docket.title} for client ${clientId} (DRAFT)`,
     newValues: docket.toJSON(),
     req,
   });
@@ -69,13 +107,23 @@ async function createDocket({ requestingUser, clientId, data, req }) {
   return full;
 }
 
+async function getAllDockets({ query }) {
+  const where = { deletedAt: null };
+
+  if (query.status) where.status = query.status;
+  if (query.clientId) where.clientId = query.clientId;
+  if (query.docketType) where.docketType = query.docketType;
+
+  return db.Docket.findAll({
+    where,
+    include: DOCKET_INCLUDE,
+    order: [['created_at', 'DESC']],
+  });
+}
+
 async function getDocketsByClient({ clientId }) {
   const client = await db.Client.findOne({ where: { id: clientId, deletedAt: null } });
-  if (!client) {
-    const err = new Error('Client not found');
-    err.statusCode = HTTP_STATUS.NOT_FOUND;
-    throw err;
-  }
+  if (!client) notFound('Client');
 
   return db.Docket.findAll({
     where: { clientId, deletedAt: null },
@@ -91,13 +139,21 @@ async function getDocketById({ docketId }) {
       ...DOCKET_INCLUDE,
       { model: db.DocketTicket, as: 'tickets', include: TICKET_INCLUDE },
       { model: db.PackageAddOn, as: 'addOns', attributes: ['id', 'status', 'totalPrice', 'customDescription'] },
+      {
+        model: db.Task, as: 'tasks',
+        attributes: ['id', 'title', 'status', 'priority', 'dueDate'],
+        include: [
+          { model: db.User, as: 'createdBy', attributes: ['id', 'firstName', 'lastName'] },
+          { model: db.User, as: 'manager', attributes: ['id', 'firstName', 'lastName'] },
+        ],
+      },
+      {
+        model: db.SubTask, as: 'subTasks',
+        attributes: ['id', 'title', 'status', 'priority', 'dueDate'],
+      },
     ],
   });
-  if (!docket) {
-    const err = new Error('Docket not found');
-    err.statusCode = HTTP_STATUS.NOT_FOUND;
-    throw err;
-  }
+  if (!docket) notFound('Docket');
   return docket;
 }
 
@@ -105,14 +161,16 @@ async function updateDocket({ requestingUser, docketId, data, req }) {
   assertLevel(requestingUser, PACKAGE_MANAGE_MAX_LEVEL, 'Only Manager level or above can update dockets');
 
   const docket = await db.Docket.findOne({ where: { id: docketId, deletedAt: null } });
-  if (!docket) {
-    const err = new Error('Docket not found');
-    err.statusCode = HTTP_STATUS.NOT_FOUND;
-    throw err;
-  }
+  if (!docket) notFound('Docket');
 
   const oldValues = docket.toJSON();
-  const fields = ['title', 'description', 'docketType', 'isTicketBased', 'status', 'startDate', 'endDate', 'assignedManagerId', 'packageId'];
+
+  // Prevent direct status changes to PUBLISHED (use publishDocket instead)
+  if (data.status === 'PUBLISHED') {
+    badRequest('Use the publish endpoint to publish a docket');
+  }
+
+  const fields = ['title', 'description', 'docketType', 'isTicketBased', 'status', 'startDate', 'endDate', 'packageId'];
   fields.forEach(f => { if (data[f] !== undefined) docket[f] = data[f]; });
   await docket.save();
 
@@ -138,11 +196,7 @@ async function deleteDocket({ requestingUser, docketId, req }) {
   assertLevel(requestingUser, PACKAGE_MANAGE_MAX_LEVEL, 'Only Manager level or above can delete dockets');
 
   const docket = await db.Docket.findOne({ where: { id: docketId, deletedAt: null } });
-  if (!docket) {
-    const err = new Error('Docket not found');
-    err.statusCode = HTTP_STATUS.NOT_FOUND;
-    throw err;
-  }
+  if (!docket) notFound('Docket');
 
   await docket.update({ deletedAt: new Date(), status: 'CANCELLED' });
 
@@ -158,20 +212,224 @@ async function deleteDocket({ requestingUser, docketId, req }) {
   });
 }
 
+// ─── Publish Docket ───────────────────────────────────────────────────────────
+
+async function publishDocket({ requestingUser, docketId, req }) {
+  assertLevel(requestingUser, PACKAGE_MANAGE_MAX_LEVEL, 'Only Manager level or above can publish dockets');
+
+  const docket = await db.Docket.findOne({
+    where: { id: docketId, deletedAt: null },
+    include: [MANAGER_INCLUDE],
+  });
+  if (!docket) notFound('Docket');
+
+  if (docket.status !== 'DRAFT') {
+    badRequest(`Cannot publish a docket with status "${docket.status}". Only DRAFT dockets can be published.`);
+  }
+
+  // Validate required fields before publishing
+  if (!docket.title || docket.title.trim() === '') {
+    badRequest('Docket must have a title before publishing');
+  }
+
+  const oldValues = docket.toJSON();
+
+  docket.status = 'PUBLISHED';
+  docket.publishedAt = new Date();
+  docket.publishedById = requestingUser.id;
+  await docket.save();
+
+  const full = await db.Docket.findByPk(docket.id, { include: DOCKET_INCLUDE });
+
+  await writeAuditLog({
+    performedBy: requestingUser,
+    action: AUDIT_ACTION.DOCKET_PUBLISHED,
+    category: AUDIT_CATEGORY.DOCKET,
+    entity: 'Docket',
+    entityId: docket.id,
+    entityName: docket.title,
+    description: `Published docket: ${docket.title}`,
+    oldValues,
+    newValues: full.toJSON(),
+    req,
+  });
+
+  return full;
+}
+
+// ─── Docket Manager CRUD ─────────────────────────────────────────────────────
+
+async function getDocketManagers({ docketId }) {
+  const docket = await db.Docket.findOne({ where: { id: docketId, deletedAt: null } });
+  if (!docket) notFound('Docket');
+
+  return db.DocketManager.findAll({
+    where: { docketId },
+    include: [
+      { model: db.User, as: 'manager', attributes: ['id', 'firstName', 'lastName', 'email'] },
+      { model: db.User, as: 'assignedBy', attributes: ['id', 'firstName', 'lastName'] },
+    ],
+    order: [['assigned_at', 'ASC']],
+  });
+}
+
+async function addDocketManager({ requestingUser, docketId, data, req }) {
+  assertLevel(requestingUser, PACKAGE_MANAGE_MAX_LEVEL, 'Only Manager level or above can assign docket managers');
+
+  const docket = await db.Docket.findOne({ where: { id: docketId, deletedAt: null } });
+  if (!docket) notFound('Docket');
+
+  const { managerId, role } = data;
+
+  // Verify the user exists and is level 2/3/4
+  const manager = await db.User.findOne({
+    where: { id: managerId },
+    include: [{ model: db.RoleDefinition, as: 'role', attributes: ['accessLevel'] }],
+  });
+  if (!manager) notFound('Manager user');
+
+  if (manager.role.accessLevel > DOCKET_MANAGE_MAX_LEVEL) {
+    badRequest(`User must be level ${DOCKET_MANAGE_MAX_LEVEL} or above to be assigned as docket manager`);
+  }
+
+  // Check for duplicate
+  const existing = await db.DocketManager.findOne({
+    where: { docketId, managerId },
+  });
+  if (existing) {
+    badRequest('This manager is already assigned to this docket');
+  }
+
+  const assignment = await db.DocketManager.create({
+    docketId,
+    managerId,
+    role: role || 'PRIMARY',
+    assignedById: requestingUser.id,
+  });
+
+  const full = await db.DocketManager.findByPk(assignment.id, {
+    include: [
+      { model: db.User, as: 'manager', attributes: ['id', 'firstName', 'lastName', 'email'] },
+      { model: db.User, as: 'assignedBy', attributes: ['id', 'firstName', 'lastName'] },
+    ],
+  });
+
+  await writeAuditLog({
+    performedBy: requestingUser,
+    action: AUDIT_ACTION.DOCKET_MANAGER_ADDED,
+    category: AUDIT_CATEGORY.DOCKET,
+    entity: 'DocketManager',
+    entityId: assignment.id,
+    entityName: `${docket.title} → Manager`,
+    description: `Added manager ${managerId} to docket: ${docket.title} with role ${role || 'PRIMARY'}`,
+    newValues: assignment.toJSON(),
+    req,
+  });
+
+  return full;
+}
+
+async function removeDocketManager({ requestingUser, docketId, managerId, req }) {
+  assertLevel(requestingUser, PACKAGE_MANAGE_MAX_LEVEL, 'Only Manager level or above can remove docket managers');
+
+  const docket = await db.Docket.findOne({ where: { id: docketId, deletedAt: null } });
+  if (!docket) notFound('Docket');
+
+  const assignment = await db.DocketManager.findOne({
+    where: { docketId, managerId },
+  });
+  if (!assignment) notFound('Manager assignment');
+
+  await assignment.destroy();
+
+  await writeAuditLog({
+    performedBy: requestingUser,
+    action: AUDIT_ACTION.DOCKET_MANAGER_REMOVED,
+    category: AUDIT_CATEGORY.DOCKET,
+    entity: 'DocketManager',
+    entityId: assignment.id,
+    entityName: `${docket.title} → Manager`,
+    description: `Removed manager ${managerId} from docket: ${docket.title}`,
+    req,
+  });
+}
+
+// ─── Task ↔ Docket Linking ────────────────────────────────────────────────────
+
+async function linkTaskToDocket({ requestingUser, docketId, taskId, req }) {
+  assertLevel(requestingUser, PACKAGE_MANAGE_MAX_LEVEL, 'Only Manager level or above can link tasks to dockets');
+
+  const docket = await db.Docket.findOne({ where: { id: docketId, deletedAt: null } });
+  if (!docket) notFound('Docket');
+
+  const task = await db.Task.findByPk(taskId);
+  if (!task) notFound('Task');
+
+  if (task.docketId && task.docketId !== docketId) {
+    badRequest('This task is already linked to another docket. Unlink it first.');
+  }
+
+  const oldValues = { docketId: task.docketId };
+  task.docketId = docketId;
+  await task.save();
+
+  await writeAuditLog({
+    performedBy: requestingUser,
+    action: AUDIT_ACTION.DOCKET_TASK_LINKED,
+    category: AUDIT_CATEGORY.DOCKET,
+    entity: 'Task',
+    entityId: task.id,
+    entityName: task.title,
+    description: `Linked task "${task.title}" to docket "${docket.title}"`,
+    oldValues,
+    newValues: { docketId },
+    req,
+  });
+
+  return task;
+}
+
+async function unlinkTaskFromDocket({ requestingUser, docketId, taskId, req }) {
+  assertLevel(requestingUser, PACKAGE_MANAGE_MAX_LEVEL, 'Only Manager level or above can unlink tasks from dockets');
+
+  const docket = await db.Docket.findOne({ where: { id: docketId, deletedAt: null } });
+  if (!docket) notFound('Docket');
+
+  const task = await db.Task.findByPk(taskId);
+  if (!task) notFound('Task');
+
+  if (task.docketId !== docketId) {
+    badRequest('This task is not linked to this docket');
+  }
+
+  const oldValues = { docketId: task.docketId };
+  task.docketId = null;
+  await task.save();
+
+  await writeAuditLog({
+    performedBy: requestingUser,
+    action: AUDIT_ACTION.DOCKET_TASK_UNLINKED,
+    category: AUDIT_CATEGORY.DOCKET,
+    entity: 'Task',
+    entityId: task.id,
+    entityName: task.title,
+    description: `Unlinked task "${task.title}" from docket "${docket.title}"`,
+    oldValues,
+    newValues: { docketId: null },
+    req,
+  });
+
+  return task;
+}
+
 // ─── Docket Tickets ───────────────────────────────────────────────────────────
 
 async function createTicket({ requestingUser, docketId, data, req }) {
   const docket = await db.Docket.findOne({ where: { id: docketId, deletedAt: null } });
-  if (!docket) {
-    const err = new Error('Docket not found');
-    err.statusCode = HTTP_STATUS.NOT_FOUND;
-    throw err;
-  }
+  if (!docket) notFound('Docket');
 
   if (!docket.isTicketBased) {
-    const err = new Error('This docket is not ticket-based. Use the Task system instead.');
-    err.statusCode = HTTP_STATUS.BAD_REQUEST;
-    throw err;
+    badRequest('This docket is not ticket-based. Use the Task system instead.');
   }
 
   const { title, description, ticketType, priority, serviceId, addOnId, dueDate, assignedToId } = data;
@@ -208,11 +466,7 @@ async function createTicket({ requestingUser, docketId, data, req }) {
 
 async function getTicketsByDocket({ docketId }) {
   const docket = await db.Docket.findOne({ where: { id: docketId, deletedAt: null } });
-  if (!docket) {
-    const err = new Error('Docket not found');
-    err.statusCode = HTTP_STATUS.NOT_FOUND;
-    throw err;
-  }
+  if (!docket) notFound('Docket');
 
   return db.DocketTicket.findAll({
     where: { docketId },
@@ -223,21 +477,13 @@ async function getTicketsByDocket({ docketId }) {
 
 async function getTicketById({ ticketId }) {
   const ticket = await db.DocketTicket.findByPk(ticketId, { include: TICKET_INCLUDE });
-  if (!ticket) {
-    const err = new Error('Ticket not found');
-    err.statusCode = HTTP_STATUS.NOT_FOUND;
-    throw err;
-  }
+  if (!ticket) notFound('Ticket');
   return ticket;
 }
 
 async function updateTicket({ requestingUser, ticketId, data, req }) {
   const ticket = await db.DocketTicket.findByPk(ticketId);
-  if (!ticket) {
-    const err = new Error('Ticket not found');
-    err.statusCode = HTTP_STATUS.NOT_FOUND;
-    throw err;
-  }
+  if (!ticket) notFound('Ticket');
 
   const oldValues = ticket.toJSON();
   const fields = ['title', 'description', 'ticketType', 'priority', 'status', 'serviceId', 'addOnId', 'taskId', 'dueDate', 'assignedToId', 'resolutionNote'];
@@ -275,11 +521,7 @@ async function deleteTicket({ requestingUser, ticketId, req }) {
   assertLevel(requestingUser, PACKAGE_MANAGE_MAX_LEVEL, 'Only Manager level or above can delete tickets');
 
   const ticket = await db.DocketTicket.findByPk(ticketId);
-  if (!ticket) {
-    const err = new Error('Ticket not found');
-    err.statusCode = HTTP_STATUS.NOT_FOUND;
-    throw err;
-  }
+  if (!ticket) notFound('Ticket');
 
   await ticket.destroy();
 
@@ -296,11 +538,23 @@ async function deleteTicket({ requestingUser, ticketId, req }) {
 }
 
 module.exports = {
+  // Docket CRUD
   createDocket,
+  getAllDockets,
   getDocketsByClient,
   getDocketById,
   updateDocket,
   deleteDocket,
+  // Publish
+  publishDocket,
+  // Manager CRUD
+  getDocketManagers,
+  addDocketManager,
+  removeDocketManager,
+  // Task linking
+  linkTaskToDocket,
+  unlinkTaskFromDocket,
+  // Tickets
   createTicket,
   getTicketsByDocket,
   getTicketById,

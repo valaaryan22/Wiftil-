@@ -4,11 +4,15 @@
  * Docket — A project/engagement container linked to a client.
  *
  * docketType:   RETAINER | PROJECT | AD_HOC | INTERNAL
- * status:       PLANNING | ACTIVE | ON_HOLD | COMPLETED | CANCELLED
+ * status:       DRAFT | PUBLISHED | ACTIVE | ON_HOLD | COMPLETED | CANCELLED
  * isTicketBased: true  → work is tracked via DocketTickets
  *                false → work is tracked via the existing Task system
  *
+ * Lifecycle:  DRAFT → PUBLISHED → ACTIVE → ON_HOLD / COMPLETED / CANCELLED
+ *
  * Docket code is auto-generated: DK-YYYYMMDD-XXXX
+ *
+ * Managers are assigned via the DocketManager join table (many-to-many).
  */
 module.exports = (sequelize, DataTypes) => {
   const Docket = sequelize.define('Docket', {
@@ -59,9 +63,9 @@ module.exports = (sequelize, DataTypes) => {
       field: 'is_ticket_based',
     },
     status: {
-      type: DataTypes.ENUM('PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED'),
+      type: DataTypes.ENUM('DRAFT', 'PUBLISHED', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED'),
       allowNull: false,
-      defaultValue: 'PLANNING',
+      defaultValue: 'DRAFT',
     },
     startDate: {
       type: DataTypes.DATEONLY,
@@ -73,10 +77,15 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true,
       field: 'end_date',
     },
-    assignedManagerId: {
+    publishedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'published_at',
+    },
+    publishedById: {
       type: DataTypes.UUID,
       allowNull: true,
-      field: 'assigned_manager_id',
+      field: 'published_by_id',
       references: { model: 'users', key: 'id' },
     },
     createdById: {
@@ -124,17 +133,30 @@ module.exports = (sequelize, DataTypes) => {
       as: 'package',
     });
     Docket.belongsTo(models.User, {
-      foreignKey: 'assigned_manager_id',
-      as: 'assignedManager',
-    });
-    Docket.belongsTo(models.User, {
       foreignKey: 'created_by_id',
       as: 'createdBy',
+    });
+    Docket.belongsTo(models.User, {
+      foreignKey: 'published_by_id',
+      as: 'publishedBy',
+    });
+    Docket.hasMany(models.DocketManager, {
+      foreignKey: 'docket_id',
+      as: 'managers',
+      onDelete: 'CASCADE',
     });
     Docket.hasMany(models.DocketTicket, {
       foreignKey: 'docket_id',
       as: 'tickets',
       onDelete: 'CASCADE',
+    });
+    Docket.hasMany(models.Task, {
+      foreignKey: 'docket_id',
+      as: 'tasks',
+    });
+    Docket.hasMany(models.SubTask, {
+      foreignKey: 'docket_id',
+      as: 'subTasks',
     });
     Docket.hasMany(models.PackageAddOn, {
       foreignKey: 'docket_id',

@@ -102,4 +102,80 @@ router.delete(
   ctrl.deleteClient
 );
 
+// ─── Client Overview ───────────────────────────────────────────────────────────
+const overviewCtrl = require('../controllers/clientOverview.controller');
+
+// GET /clients/:clientId/overview — Full overview aggregation
+router.get(
+  '/:clientId/overview',
+  [param('clientId').isUUID().withMessage('Valid client ID required')],
+  validate,
+  overviewCtrl.getClientOverview
+);
+
+// PATCH /clients/:clientId/scores — Admin updates loyalty/health/relationship
+router.patch(
+  '/:clientId/scores',
+  authorizeLevel(CLIENT_MANAGE_MAX_LEVEL),
+  [
+    param('clientId').isUUID().withMessage('Valid client ID required'),
+    body('loyaltyScore').optional().isInt({ min: 0, max: 100 }).withMessage('Loyalty score must be 0-100'),
+    body('healthScore').optional().isInt({ min: 0, max: 100 }).withMessage('Health score must be 0-100'),
+    body('relationshipStatus').optional().isIn(['NEW', 'GROWING', 'TRUSTED_PARTNER', 'AT_RISK', 'CHURNED']),
+  ],
+  validate,
+  overviewCtrl.updateClientScores
+);
+
+// ─── Client Risks ─────────────────────────────────────────────────────────────
+
+// GET /clients/:clientId/risks — List risks
+router.get(
+  '/:clientId/risks',
+  [param('clientId').isUUID()],
+  validate,
+  overviewCtrl.getRisks
+);
+
+// POST /clients/:clientId/risks — Create a risk
+router.post(
+  '/:clientId/risks',
+  authorizeLevel(CLIENT_MANAGE_MAX_LEVEL),
+  [
+    param('clientId').isUUID(),
+    body('title').trim().notEmpty().withMessage('Title is required'),
+    body('description').optional().trim(),
+    body('severity').optional().isIn(['info', 'warning', 'danger']),
+    body('category').optional().isIn(['BILLING', 'OPERATIONAL', 'RELATIONSHIP', 'DELIVERY', 'OTHER']),
+  ],
+  validate,
+  overviewCtrl.createRisk
+);
+
+// PATCH /clients/:clientId/risks/:riskId — Update a risk
+router.patch(
+  '/:clientId/risks/:riskId',
+  authorizeLevel(CLIENT_MANAGE_MAX_LEVEL),
+  [
+    param('clientId').isUUID(),
+    param('riskId').isUUID(),
+    body('title').optional().trim(),
+    body('description').optional().trim(),
+    body('severity').optional().isIn(['info', 'warning', 'danger']),
+    body('category').optional().isIn(['BILLING', 'OPERATIONAL', 'RELATIONSHIP', 'DELIVERY', 'OTHER']),
+    body('isResolved').optional().isBoolean(),
+  ],
+  validate,
+  overviewCtrl.updateRisk
+);
+
+// DELETE /clients/:clientId/risks/:riskId — Delete a risk
+router.delete(
+  '/:clientId/risks/:riskId',
+  authorizeLevel(CLIENT_MANAGE_MAX_LEVEL),
+  [param('clientId').isUUID(), param('riskId').isUUID()],
+  validate,
+  overviewCtrl.deleteRisk
+);
+
 module.exports = router;

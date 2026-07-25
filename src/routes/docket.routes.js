@@ -16,7 +16,7 @@ router.use(authenticate);
 // GET  /clients/:clientId/dockets
 router.get('/', ctrl.getDocketsByClient);
 
-// POST /clients/:clientId/dockets
+// POST /clients/:clientId/dockets  (always creates in DRAFT)
 router.post(
   '/',
   authorizeLevel(PACKAGE_MANAGE_MAX_LEVEL),
@@ -25,11 +25,12 @@ router.post(
     body('description').optional().trim(),
     body('docketType').optional().isIn(['RETAINER', 'PROJECT', 'AD_HOC', 'INTERNAL']),
     body('isTicketBased').optional().isBoolean(),
-    body('status').optional().isIn(['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED']),
     body('startDate').optional({ nullable: true }).isISO8601(),
     body('endDate').optional({ nullable: true }).isISO8601(),
-    body('assignedManagerId').optional({ nullable: true }).isUUID(),
     body('packageId').optional({ nullable: true }).isUUID(),
+    // Initial manager assignment (array of UUIDs or objects with {id, role})
+    body('managerIds').optional().isArray(),
+    body('managerIds.*').optional(),
   ],
   validate,
   ctrl.createDocket

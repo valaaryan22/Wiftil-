@@ -43,6 +43,7 @@ const CLIENT_MANAGE_MAX_LEVEL   = 3; // Level ≤ 3 (MANAGER+) can create/update
 
 // Package / Docket / Ticket permissions
 const PACKAGE_MANAGE_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can manage packages, dockets, add-ons
+const DOCKET_MANAGE_MAX_LEVEL   = 4; // Level ≤ 4 (TEAM_LEAD+) can be assigned as docket managers
 
 // Payment collection permissions
 const PAYMENT_MANAGE_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can create invoices, approve payments, cancel
@@ -115,6 +116,21 @@ const SUBTASK_STATUS = Object.freeze({
   MANAGER_REVIEW:       'MANAGER_REVIEW',
   FINAL_APPROVED:       'FINAL_APPROVED',
   REOPENED:             'REOPENED',
+});
+
+const DOCKET_STATUS = Object.freeze({
+  DRAFT:      'DRAFT',
+  PUBLISHED:  'PUBLISHED',
+  ACTIVE:     'ACTIVE',
+  ON_HOLD:    'ON_HOLD',
+  COMPLETED:  'COMPLETED',
+  CANCELLED:  'CANCELLED',
+});
+
+const DOCKET_MANAGER_ROLE = Object.freeze({
+  PRIMARY:   'PRIMARY',
+  SECONDARY: 'SECONDARY',
+  REVIEWER:  'REVIEWER',
 });
 
 const HTTP_STATUS = Object.freeze({
@@ -237,6 +253,11 @@ const AUDIT_ACTION = Object.freeze({
   DOCKET_CREATED:        'DOCKET_CREATED',
   DOCKET_UPDATED:        'DOCKET_UPDATED',
   DOCKET_DELETED:        'DOCKET_DELETED',
+  DOCKET_PUBLISHED:      'DOCKET_PUBLISHED',
+  DOCKET_MANAGER_ADDED:  'DOCKET_MANAGER_ADDED',
+  DOCKET_MANAGER_REMOVED:'DOCKET_MANAGER_REMOVED',
+  DOCKET_TASK_LINKED:    'DOCKET_TASK_LINKED',
+  DOCKET_TASK_UNLINKED:  'DOCKET_TASK_UNLINKED',
   // Docket Tickets
   TICKET_CREATED:        'TICKET_CREATED',
   TICKET_UPDATED:        'TICKET_UPDATED',
@@ -275,6 +296,7 @@ module.exports = {
   RATING_MAX_LEVEL,
   CLIENT_MANAGE_MAX_LEVEL,
   PACKAGE_MANAGE_MAX_LEVEL,
+  DOCKET_MANAGE_MAX_LEVEL,
   PAYMENT_MANAGE_MAX_LEVEL,
   ADDON_APPROVE_MAX_LEVEL,
   // Legacy aliases (backward-compat)
@@ -293,6 +315,8 @@ module.exports = {
   TASK_PRIORITY,
   TASK_STATUS,
   SUBTASK_STATUS,
+  DOCKET_STATUS,
+  DOCKET_MANAGER_ROLE,
   HTTP_STATUS,
   AUDIT_CATEGORY,
   AUDIT_ACTION,

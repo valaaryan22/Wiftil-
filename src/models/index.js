@@ -46,11 +46,14 @@ const modelFiles = [
   require('./PackageService.js')(sequelize, Sequelize.DataTypes),
   require('./PackageAddOn.js')(sequelize, Sequelize.DataTypes),
   require('./Docket.js')(sequelize, Sequelize.DataTypes),
+  require('./DocketManager.js')(sequelize, Sequelize.DataTypes),
   require('./DocketTicket.js')(sequelize, Sequelize.DataTypes),
   // Client Documents module
   require('./ClientDocument.js')(sequelize, Sequelize.DataTypes),
   // Client Payment module
   require('./ClientPayment.js')(sequelize, Sequelize.DataTypes),
+  // Client Risk module
+  require('./ClientRisk.js')(sequelize, Sequelize.DataTypes),
 ];
 
 modelFiles.forEach(model => {
