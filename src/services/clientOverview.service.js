@@ -1,7 +1,7 @@
 'use strict';
 
 const { Op, fn, col, literal } = require('sequelize');
-const { sequelize, Client, ClientPayment, ClientPackage, Docket, Task, SubTask, ClientRisk, User } = require('../models');
+const { sequelize, Client, ClientPayment, ClientPackage, PackageService, PackageAddOn, ServiceCatalog, Docket, Task, SubTask, ClientRisk, User } = require('../models');
 
 // ─── Client Overview ──────────────────────────────────────────────────────────
 
@@ -17,12 +17,14 @@ async function getClientOverview({ clientId }) {
     docketsData,
     tasksData,
     risksData,
+    billingSummary,
   ] = await Promise.all([
     _getOutstanding(clientId),
     _getPackagesSummary(clientId),
     _getDocketsSummary(clientId),
     _getTasksSummary(clientId),
     _getActiveRisks(clientId),
+    _getBillingSummary(clientId),
   ]);
 
   // Quick Alerts are derived from other data
@@ -42,6 +44,7 @@ async function getClientOverview({ clientId }) {
       relationshipStatus: client.relationshipStatus,
     },
     outstanding: outstandingData,
+    billing: billingSummary,
     quickAlerts,
     packages: packagesData,
     dockets: docketsData,
@@ -78,13 +81,40 @@ async function _getOutstanding(clientId) {
 
 async function _getPackagesSummary(clientId) {
   const packages = await ClientPackage.findAll({
-    where: { clientId, status: 'ACTIVE' },
-    attributes: ['id', 'name', 'packageType', 'status', 'basePrice', 'renewalDate', 'billingCycle', 'startDate'],
+    where: { clientId, status: { [Op.in]: ['ACTIVE', 'PAUSED'] } },
+    attributes: ['id', 'name', 'packageType', 'status', 'basePrice', 'renewalDate', 'billingCycle', 'startDate', 'endDate'],
+    include: [
+      {
+        model: PackageService,
+        as: 'services',
+        required: false,
+        include: [{ model: ServiceCatalog, as: 'service', attributes: ['id', 'name', 'category', 'unit'] }],
+      },
+      {
+        model: PackageAddOn,
+        as: 'addOns',
+        required: false,
+        include: [{ model: ServiceCatalog, as: 'service', attributes: ['id', 'name', 'category'] }],
+      },
+    ],
   });
 
+  const activePackages = packages.filter(p => p.status === 'ACTIVE');
+
   return {
-    activeCount: packages.length,
-    list: packages.map(p => p.toJSON()),
+    activeCount: activePackages.length,
+    totalCount: packages.length,
+    list: packages.map(p => {
+      const pkg = p.toJSON();
+      // Summarise add-on financials per package
+      const addOnTotals = (pkg.addOns || []).reduce((acc, ao) => {
+        acc.total += parseFloat(ao.totalPrice || 0);
+        if (ao.status === 'APPROVED' || ao.status === 'DELIVERED') acc.pendingBilling += parseFloat(ao.totalPrice || 0);
+        if (ao.status === 'BILLED') acc.billed += parseFloat(ao.totalPrice || 0);
+        return acc;
+      }, { total: 0, pendingBilling: 0, billed: 0 });
+      return { ...pkg, addOnSummary: addOnTotals };
+    }),
   };
 }
 
@@ -176,6 +206,168 @@ async function _getActiveRisks(clientId) {
   return risks.map(r => r.toJSON());
 }
 
+// ─── Billing Summary ─────────────────────────────────────────────────────────
+
+async function _getBillingSummary(clientId) {
+  // ── 1. Invoice-based totals (grouped by status) ────────────────────────────
+  const invoiceRows = await ClientPayment.findAll({
+    where: { clientId, paymentType: 'INVOICE' },
+    attributes: [
+      'status',
+      [fn('COUNT', col('id')), 'count'],
+      [fn('SUM', col('total_amount')), 'totalAmount'],
+      [fn('SUM', col('paid_amount')), 'paidAmount'],
+      [fn('SUM', col('balance_amount')), 'balanceAmount'],
+    ],
+    group: ['status'],
+    raw: true,
+  });
+
+  const byStatus = {};
+  let totalInvoiced = 0;
+  let totalPaid = 0;
+  let totalOutstanding = 0; // unpaid balance across active invoices
+  let totalOverdue = 0;
+  let totalDisputed = 0;
+  let invoiceCount = 0;
+
+  for (const row of invoiceRows) {
+    const s = row.status;
+    byStatus[s] = {
+      count: parseInt(row.count || 0),
+      totalAmount: parseFloat(row.totalAmount || 0),
+      paidAmount: parseFloat(row.paidAmount || 0),
+      balanceAmount: parseFloat(row.balanceAmount || 0),
+    };
+    totalInvoiced += parseFloat(row.totalAmount || 0);
+    totalPaid += parseFloat(row.paidAmount || 0);
+    invoiceCount += parseInt(row.count || 0);
+    // Outstanding = balance on open invoices (SENT, PARTIALLY_PAID, OVERDUE, DISPUTED)
+    if (['SENT', 'PARTIALLY_PAID', 'OVERDUE', 'DISPUTED'].includes(s)) {
+      totalOutstanding += parseFloat(row.balanceAmount || 0);
+    }
+    if (s === 'OVERDUE') totalOverdue += parseFloat(row.balanceAmount || 0);
+    if (s === 'DISPUTED') totalDisputed += parseFloat(row.balanceAmount || 0);
+  }
+
+  // ── 2. Advances received ───────────────────────────────────────────────────
+  const advanceRow = await ClientPayment.findOne({
+    where: { clientId, paymentType: 'ADVANCE' },
+    attributes: [[fn('SUM', col('amount')), 'totalAdvance'], [fn('COUNT', col('id')), 'count']],
+    raw: true,
+  });
+  const totalAdvanceReceived = parseFloat(advanceRow?.totalAdvance || 0);
+  const advanceCount = parseInt(advanceRow?.count || 0);
+
+  // ── 3. Credit notes issued ─────────────────────────────────────────────────
+  const creditRow = await ClientPayment.findOne({
+    where: { clientId, paymentType: 'CREDIT_NOTE' },
+    attributes: [[fn('SUM', col('amount')), 'totalCredit'], [fn('COUNT', col('id')), 'count']],
+    raw: true,
+  });
+  const totalCreditNotes = parseFloat(creditRow?.totalCredit || 0);
+  const creditNoteCount = parseInt(creditRow?.count || 0);
+
+  // ── 4. Active package contract value ──────────────────────────────────────
+  // Sum of basePrice of all ACTIVE packages (monthly equivalent)
+  const activePackages = await ClientPackage.findAll({
+    where: { clientId, status: 'ACTIVE' },
+    attributes: ['id', 'name', 'basePrice', 'billingCycle'],
+    raw: true,
+  });
+
+  // Compute monthly value for each package
+  const CYCLE_MONTHS = { MONTHLY: 1, QUARTERLY: 3, ANNUAL: 12 };
+  let totalMonthlyContractValue = 0;
+  let totalContractValue = 0; // base prices summed as-is (per billing cycle)
+  for (const pkg of activePackages) {
+    const base = parseFloat(pkg.basePrice || 0);
+    totalContractValue += base;
+    totalMonthlyContractValue += base / (CYCLE_MONTHS[pkg.billingCycle] || 1);
+  }
+
+  // ── 5. Add-on amounts pending billing ─────────────────────────────────────
+  // Add-ons that are APPROVED or DELIVERED but not yet BILLED
+  const pendingAddOnRows = await PackageAddOn.findAll({
+    where: {
+      status: { [Op.in]: ['APPROVED', 'DELIVERED'] },
+      '$package.client_id$': clientId,
+    },
+    include: [{
+      model: ClientPackage,
+      as: 'package',
+      attributes: ['id', 'name', 'clientId'],
+      where: { clientId },
+    }],
+    attributes: ['id', 'totalPrice', 'unitPrice', 'quantity', 'status'],
+    raw: true,
+  }).catch(() => []); // graceful fallback if join fails
+
+  const addOnsPendingBillingAmount = pendingAddOnRows.reduce((sum, ao) => sum + parseFloat(ao.totalPrice || 0), 0);
+  const addOnsPendingBillingCount = pendingAddOnRows.length;
+
+  // ── 6. Billed add-ons total ────────────────────────────────────────────────
+  const billedAddOnRows = await PackageAddOn.findAll({
+    where: {
+      status: 'BILLED',
+      '$package.client_id$': clientId,
+    },
+    include: [{
+      model: ClientPackage,
+      as: 'package',
+      attributes: ['id', 'name', 'clientId'],
+      where: { clientId },
+    }],
+    attributes: ['id', 'totalPrice'],
+    raw: true,
+  }).catch(() => []);
+
+  const totalAddOnsBilled = billedAddOnRows.reduce((sum, ao) => sum + parseFloat(ao.totalPrice || 0), 0);
+
+  // ── 7. Net position ───────────────────────────────────────────────────────
+  // Effective amount collected = paid invoices + advances - credit notes
+  const netCollected = totalPaid + totalAdvanceReceived - totalCreditNotes;
+
+  return {
+    // Invoice aggregate
+    invoices: {
+      totalCount: invoiceCount,
+      totalInvoiced,          // Sum of all invoice totalAmounts
+      totalPaid,              // Sum of paidAmount across all invoices
+      totalOutstanding,       // Balance due on open (SENT/PARTIALLY_PAID/OVERDUE/DISPUTED)
+      totalOverdue,           // Balance due on OVERDUE invoices specifically
+      totalDisputed,          // Balance due on DISPUTED invoices
+      byStatus,               // Breakdown per status
+    },
+    // Advances
+    advances: {
+      count: advanceCount,
+      totalReceived: totalAdvanceReceived,
+    },
+    // Credit Notes
+    creditNotes: {
+      count: creditNoteCount,
+      totalIssued: totalCreditNotes,
+    },
+    // Package (retainer) value
+    packages: {
+      activeCount: activePackages.length,
+      totalContractValue,           // Sum of basePrice of active packages
+      monthlyEquivalentValue: parseFloat(totalMonthlyContractValue.toFixed(2)),
+    },
+    // Add-ons
+    addOns: {
+      pendingBillingCount: addOnsPendingBillingCount,
+      pendingBillingAmount: parseFloat(addOnsPendingBillingAmount.toFixed(2)),
+      totalBilled: parseFloat(totalAddOnsBilled.toFixed(2)),
+    },
+    // Net financial position
+    netCollected: parseFloat(netCollected.toFixed(2)),
+    // Unpaid charges not yet invoiced (add-ons pending + any contract value not billed)
+    uninvoicedCharges: parseFloat(addOnsPendingBillingAmount.toFixed(2)),
+  };
+}
+
 // ─── Scores Update ────────────────────────────────────────────────────────────
 
 async function updateClientScores({ requestingUser, clientId, data }) {
@@ -260,4 +452,5 @@ module.exports = {
   updateRisk,
   deleteRisk,
   getRisks,
+  getBillingSummary: _getBillingSummary,
 };

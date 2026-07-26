@@ -1,6 +1,6 @@
 'use strict';
 
-const { Op } = require('sequelize');
+const { Op, fn, col } = require('sequelize');
 const { db } = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
 const {
@@ -600,31 +600,237 @@ async function deletePayment({ requestingUser, clientId, paymentId, req }) {
 async function getPaymentSummary({ clientId }) {
   await assertClient(clientId);
 
-  const rows = await db.ClientPayment.findAll({
+  // ── 1. Invoice totals by status ───────────────────────────────────────────────
+  const invoiceRows = await db.ClientPayment.findAll({
     where: { clientId, paymentType: 'INVOICE', deletedAt: null },
     attributes: [
       'status',
-      [db.sequelize.fn('COUNT', db.sequelize.col('id')), 'count'],
-      [db.sequelize.fn('SUM', db.sequelize.col('total_amount')), 'totalInvoiced'],
-      [db.sequelize.fn('SUM', db.sequelize.col('paid_amount')),  'totalPaid'],
-      [db.sequelize.fn('SUM', db.sequelize.col('balance_amount')), 'totalBalance'],
+      [fn('COUNT', col('id')), 'count'],
+      [fn('SUM', col('total_amount')), 'totalAmount'],
+      [fn('SUM', col('paid_amount')),  'paidAmount'],
+      [fn('SUM', col('balance_amount')), 'balanceAmount'],
     ],
     group: ['status'],
     raw: true,
   });
 
-  // Advances collected
+  const byStatus = {};
+  let totalInvoiced   = 0;
+  let totalPaid       = 0;
+  let totalOutstanding = 0;
+  let totalOverdue    = 0;
+  let totalDisputed   = 0;
+  let totalWrittenOff = 0;
+  let invoiceCount    = 0;
+
+  for (const row of invoiceRows) {
+    const s = row.status;
+    byStatus[s] = {
+      count:         parseInt(row.count        || 0),
+      totalAmount:   parseFloat(row.totalAmount  || 0),
+      paidAmount:    parseFloat(row.paidAmount   || 0),
+      balanceAmount: parseFloat(row.balanceAmount || 0),
+    };
+    totalInvoiced  += parseFloat(row.totalAmount  || 0);
+    totalPaid      += parseFloat(row.paidAmount   || 0);
+    invoiceCount   += parseInt(row.count          || 0);
+    if (['SENT', 'PARTIALLY_PAID', 'OVERDUE', 'DISPUTED'].includes(s)) {
+      totalOutstanding += parseFloat(row.balanceAmount || 0);
+    }
+    if (s === 'OVERDUE')    totalOverdue    += parseFloat(row.balanceAmount || 0);
+    if (s === 'DISPUTED')   totalDisputed   += parseFloat(row.balanceAmount || 0);
+    if (s === 'WRITTEN_OFF') totalWrittenOff += parseFloat(row.totalAmount  || 0);
+  }
+
+  // ── 2. Per-package invoice breakdown ────────────────────────────────────────
+  const pkgInvoiceRows = await db.ClientPayment.findAll({
+    where: { clientId, paymentType: 'INVOICE', deletedAt: null, packageId: { [Op.ne]: null } },
+    attributes: [
+      'packageId',
+      [fn('COUNT', col('ClientPayment.id')), 'count'],
+      [fn('SUM', col('total_amount')),  'totalAmount'],
+      [fn('SUM', col('paid_amount')),   'paidAmount'],
+      [fn('SUM', col('balance_amount')),'balanceAmount'],
+    ],
+    include: [{
+      model: db.ClientPackage,
+      as: 'package',
+      attributes: ['id', 'name', 'packageType', 'billingCycle', 'basePrice', 'status'],
+      required: false,
+    }],
+    group: ['packageId', 'package.id'],
+    raw: true,
+    nest: true,
+  });
+
+  const byPackage = pkgInvoiceRows.map(row => ({
+    packageId:     row.packageId,
+    packageName:   row.package?.name || null,
+    packageType:   row.package?.packageType || null,
+    billingCycle:  row.package?.billingCycle || null,
+    basePrice:     parseFloat(row.package?.basePrice || 0),
+    packageStatus: row.package?.status || null,
+    invoiceCount:  parseInt(row.count        || 0),
+    totalInvoiced: parseFloat(row.totalAmount  || 0),
+    totalPaid:     parseFloat(row.paidAmount   || 0),
+    totalBalance:  parseFloat(row.balanceAmount || 0),
+  }));
+
+  // ── 3. Advances received ────────────────────────────────────────────────
   const advanceRow = await db.ClientPayment.findOne({
     where: { clientId, paymentType: 'ADVANCE', deletedAt: null },
     attributes: [
-      [db.sequelize.fn('SUM', db.sequelize.col('amount')), 'totalAdvance'],
+      [fn('SUM', col('amount')), 'totalAdvance'],
+      [fn('COUNT', col('id')),  'count'],
     ],
     raw: true,
   });
+  const totalAdvanceReceived = parseFloat(advanceRow?.totalAdvance || 0);
+  const advanceCount         = parseInt(advanceRow?.count          || 0);
+
+  // ── 4. Credit notes ─────────────────────────────────────────────────────
+  const creditRow = await db.ClientPayment.findOne({
+    where: { clientId, paymentType: 'CREDIT_NOTE', deletedAt: null },
+    attributes: [
+      [fn('SUM', col('amount')), 'totalCredit'],
+      [fn('COUNT', col('id')),  'count'],
+    ],
+    raw: true,
+  });
+  const totalCreditNotes = parseFloat(creditRow?.totalCredit || 0);
+  const creditNoteCount  = parseInt(creditRow?.count         || 0);
+
+  // ── 5. Active package contract values ────────────────────────────────────
+  const activePackages = await db.ClientPackage.findAll({
+    where: { clientId, status: 'ACTIVE' },
+    attributes: ['id', 'name', 'basePrice', 'billingCycle', 'packageType', 'renewalDate', 'startDate'],
+    raw: true,
+  });
+
+  const CYCLE_MONTHS = { MONTHLY: 1, QUARTERLY: 3, ANNUAL: 12 };
+  let totalContractValue          = 0;
+  let totalMonthlyContractValue   = 0;
+  for (const pkg of activePackages) {
+    const base = parseFloat(pkg.basePrice || 0);
+    totalContractValue        += base;
+    totalMonthlyContractValue += base / (CYCLE_MONTHS[pkg.billingCycle] || 1);
+  }
+
+  // ── 6. Add-on charges (pending billing vs billed) ───────────────────────────
+  // Fetch all add-ons for this client's packages, grouped by status
+  const addOnRows = await db.PackageAddOn.findAll({
+    where: {
+      '$package.client_id$': clientId,
+    },
+    include: [{
+      model: db.ClientPackage,
+      as: 'package',
+      attributes: ['id', 'name', 'clientId'],
+      where: { clientId },
+      required: true,
+    }],
+    attributes: [
+      'status',
+      [fn('COUNT', col('PackageAddOn.id')), 'count'],
+      [fn('SUM', col('total_price')),       'totalAmount'],
+    ],
+    group: ['status', 'package.id', 'package.name', 'package.client_id'],
+    raw: true,
+    nest: true,
+  }).catch(() => []);
+
+  // Aggregate by status
+  const addOnByStatus = {};
+  let addOnPendingBillingAmount = 0;
+  let addOnPendingBillingCount  = 0;
+  let addOnBilledAmount         = 0;
+
+  for (const row of addOnRows) {
+    const s = row.status;
+    if (!addOnByStatus[s]) addOnByStatus[s] = { count: 0, totalAmount: 0 };
+    addOnByStatus[s].count       += parseInt(row.count       || 0);
+    addOnByStatus[s].totalAmount += parseFloat(row.totalAmount || 0);
+
+    if (['APPROVED', 'DELIVERED'].includes(s)) {
+      addOnPendingBillingAmount += parseFloat(row.totalAmount || 0);
+      addOnPendingBillingCount  += parseInt(row.count         || 0);
+    }
+    if (s === 'BILLED') addOnBilledAmount += parseFloat(row.totalAmount || 0);
+  }
+
+  // ── 7. Upcoming invoices (DRAFT / SENT not yet overdue) ─────────────────────
+  const now = new Date();
+  const upcomingInvoices = await db.ClientPayment.findAll({
+    where: {
+      clientId,
+      paymentType: 'INVOICE',
+      deletedAt: null,
+      status: { [Op.in]: ['DRAFT', 'SENT'] },
+      dueDate: { [Op.gte]: now },
+    },
+    attributes: ['id', 'invoiceNumber', 'totalAmount', 'balanceAmount', 'dueDate', 'status', 'packageId'],
+    include: [{
+      model: db.ClientPackage, as: 'package',
+      attributes: ['id', 'name'],
+      required: false,
+    }],
+    order: [['due_date', 'ASC']],
+    limit: 5,
+  });
+
+  // ── 8. Net financial position ────────────────────────────────────────────────
+  const netCollected = totalPaid + totalAdvanceReceived - totalCreditNotes;
 
   return {
-    byStatus: rows,
-    totalAdvanceReceived: parseFloat(advanceRow?.totalAdvance || 0),
+    // Invoice summary by status
+    invoices: {
+      totalCount: invoiceCount,
+      totalInvoiced,
+      totalPaid,
+      totalOutstanding,           // Balance due across open invoices
+      totalOverdue,               // Of which: overdue
+      totalDisputed,              // Of which: disputed
+      totalWrittenOff,            // Written-off amounts
+      byStatus,                   // Per-status breakdown
+    },
+
+    // Per-package invoice breakdown
+    byPackage,
+
+    // Advances
+    advances: {
+      count: advanceCount,
+      totalReceived: totalAdvanceReceived,
+    },
+
+    // Credit Notes
+    creditNotes: {
+      count: creditNoteCount,
+      totalIssued: totalCreditNotes,
+    },
+
+    // Active package (retainer) contract value
+    packages: {
+      activeCount:             activePackages.length,
+      totalContractValue,
+      monthlyEquivalentValue:  parseFloat(totalMonthlyContractValue.toFixed(2)),
+      list: activePackages,
+    },
+
+    // Add-on charges
+    addOns: {
+      byStatus: addOnByStatus,
+      pendingBillingCount:   addOnPendingBillingCount,
+      pendingBillingAmount:  parseFloat(addOnPendingBillingAmount.toFixed(2)),
+      totalBilledAmount:     parseFloat(addOnBilledAmount.toFixed(2)),
+    },
+
+    // Upcoming invoices (next 5 not yet due)
+    upcomingInvoices: upcomingInvoices.map(i => i.toJSON()),
+
+    // Net financial position
+    netCollected:       parseFloat(netCollected.toFixed(2)),
+    uninvoicedCharges:  parseFloat(addOnPendingBillingAmount.toFixed(2)),
   };
 }
 
