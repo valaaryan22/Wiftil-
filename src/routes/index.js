@@ -23,6 +23,7 @@ const docketRoutes       = require('./docket.routes');
 const docketItemRoutes   = require('./docketItem.routes');
 const clientDocumentRoutes = require('./clientDocument.routes');
 const clientPaymentRoutes  = require('./clientPayment.routes');
+const dashboardRoutes      = require('./dashboard.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -49,6 +50,9 @@ router.use('/clients/:clientId/packages', packageRoutes);
 router.use('/clients/:clientId/dockets',    docketRoutes);
 router.use('/clients/:clientId/documents',  clientDocumentRoutes);
 router.use('/clients/:clientId/payments',   clientPaymentRoutes);
+
+// ── Dashboard module (user-specific) ────────────────────────────────────────
+router.use('/dashboard', dashboardRoutes);
 
 // ── Task management module ────────────────────────────────────────────────────
 router.use('/tasks',                                          taskRoutes);
