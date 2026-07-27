@@ -127,6 +127,28 @@ router.patch(
   overviewCtrl.updateClientScores
 );
 
+// GET /clients/:clientId/level — Get client tier level
+router.get(
+  '/:clientId/level',
+  [param('clientId').isUUID().withMessage('Valid client ID required')],
+  validate,
+  overviewCtrl.getClientLevel
+);
+
+// PATCH /clients/:clientId/level — Admin sets client tier (BASIC | STANDARD | PREMIUM)
+router.patch(
+  '/:clientId/level',
+  authorizeLevel(CLIENT_MANAGE_MAX_LEVEL),
+  [
+    param('clientId').isUUID().withMessage('Valid client ID required'),
+    body('level')
+      .notEmpty().withMessage('level is required')
+      .isIn(['BASIC', 'STANDARD', 'PREMIUM']).withMessage('level must be BASIC, STANDARD, or PREMIUM'),
+  ],
+  validate,
+  overviewCtrl.updateClientLevel
+);
+
 // ─── Client Risks ─────────────────────────────────────────────────────────────
 
 // GET /clients/:clientId/risks — List risks

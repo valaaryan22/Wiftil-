@@ -36,6 +36,10 @@ router.patch(
     body('startDate').optional({ nullable: true }).isISO8601(),
     body('endDate').optional({ nullable: true }).isISO8601(),
     body('renewalDate').optional({ nullable: true }).isISO8601(),
+    body('notes').optional({ nullable: true }).trim(),
+    body('whatWeDo').optional({ nullable: true }).trim(),
+    body('whatWeDoNot').optional({ nullable: true }).trim(),
+    body('moderationScope').optional({ nullable: true }).trim(),
   ],
   validate,
   ctrl.updatePackage
@@ -58,6 +62,7 @@ router.post(
     body('frequency').optional().isIn(['MONTHLY', 'WEEKLY', 'ALWAYS_ON', 'ON_DEMAND', 'PER_CYCLE']),
     body('ownerLabel').optional({ nullable: true }).isString().trim(),
     body('isIncluded').optional().isBoolean(),
+    body('unitPrice').optional({ nullable: true }).isDecimal(),
   ],
   validate,
   ctrl.addServiceToPackage
@@ -67,7 +72,16 @@ router.post(
 router.patch(
   '/:packageId/services/:serviceEntryId',
   authorizeLevel(PACKAGE_MANAGE_MAX_LEVEL),
-  [...pkgIdParam, param('serviceEntryId').isUUID()],
+  [
+    ...pkgIdParam, 
+    param('serviceEntryId').isUUID(),
+    body('quantity').optional({ nullable: true }).isInt({ min: 1 }),
+    body('scope').optional().trim(),
+    body('frequency').optional().isIn(['MONTHLY', 'WEEKLY', 'ALWAYS_ON', 'ON_DEMAND', 'PER_CYCLE']),
+    body('ownerLabel').optional({ nullable: true }).isString().trim(),
+    body('isIncluded').optional().isBoolean(),
+    body('unitPrice').optional({ nullable: true }).isDecimal(),
+  ],
   validate,
   ctrl.updatePackageService
 );
@@ -98,9 +112,9 @@ router.post(
   ctrl.requestAddOn
 );
 
-// PATCH /addons/:addOnId/review — approve or reject an add-on
+// PATCH /:packageId/addons/:addOnId/review — approve or reject an add-on
 router.patch(
-  '/addons/:addOnId/review',
+  '/:packageId/addons/:addOnId/review',
   authorizeLevel(PACKAGE_MANAGE_MAX_LEVEL),
   [
     param('addOnId').isUUID(),
@@ -111,9 +125,9 @@ router.patch(
   ctrl.approveAddOn
 );
 
-// PATCH /addons/:addOnId/status — move add-on to DELIVERED or BILLED
+// PATCH /:packageId/addons/:addOnId/status — move add-on to DELIVERED or BILLED
 router.patch(
-  '/addons/:addOnId/status',
+  '/:packageId/addons/:addOnId/status',
   authorizeLevel(PACKAGE_MANAGE_MAX_LEVEL),
   [
     param('addOnId').isUUID(),

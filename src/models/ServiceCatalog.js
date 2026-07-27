@@ -23,6 +23,19 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       defaultValue: 'OTHER',
     },
+    serviceLevel: {
+      /**
+       * 10-tier service level system:
+       *   Basic:    BL-1, BL-2, BL-3  (3 levels)
+       *   Standard: SL-1, SL-2, SL-3  (3 levels)
+       *   Premium:  PL-1, PL-2, PL-3  (3 levels)
+       *   Ultra:    UL-1               (1 level only)
+       */
+      type: DataTypes.ENUM('BL-1', 'BL-2', 'BL-3', 'SL-1', 'SL-2', 'SL-3', 'PL-1', 'PL-2', 'PL-3', 'UL-1'),
+      allowNull: true,
+      defaultValue: null,
+      field: 'service_level',
+    },
     description: {
       type: DataTypes.TEXT,
       allowNull: true,
@@ -58,6 +71,7 @@ module.exports = (sequelize, DataTypes) => {
     indexes: [
       { fields: ['category'] },
       { fields: ['is_active'] },
+      { fields: ['service_level'] },
     ],
   });
 

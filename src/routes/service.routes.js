@@ -15,6 +15,7 @@ const serviceValidators = [
   body('name').trim().notEmpty().withMessage('Service name is required'),
   body('category').isIn(['DESIGN', 'MARKETING', 'ADVERTISING', 'TECHNICAL', 'CONTENT', 'OTHER']).withMessage('Invalid category'),
   body('description').optional().trim(),
+  body('serviceLevel').optional({ nullable: true }).isIn(['BL-1', 'BL-2', 'BL-3', 'SL-1', 'SL-2', 'SL-3', 'PL-1', 'PL-2', 'PL-3', 'UL-1', '']).withMessage('Invalid service level'),
   body('unit').optional().trim(),
   body('defaultPrice').optional({ nullable: true }).isDecimal().withMessage('defaultPrice must be a number'),
 ];

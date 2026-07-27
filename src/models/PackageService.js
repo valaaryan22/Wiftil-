@@ -5,6 +5,12 @@
  *
  * frequency: MONTHLY | WEEKLY | ALWAYS_ON | ON_DEMAND | PER_CYCLE
  * isIncluded: true = included in package, false = not in this package (informational)
+ *
+ * Pricing:
+ *   unitPrice  — overrides ServiceCatalog.defaultPrice for this specific package line (optional).
+ *   lineTotal  — VIRTUAL: quantity × unitPrice (not stored, computed at read time).
+ *   The package's basePrice snapshot is recalculated by the service layer whenever
+ *   PackageService rows are created, updated, or deleted.
  */
 module.exports = (sequelize, DataTypes) => {
   const PackageService = sequelize.define('PackageService', {
@@ -45,6 +51,23 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING(150),
       allowNull: true,
       field: 'owner_label',
+    },
+    unitPrice: {
+      // Overrides ServiceCatalog.defaultPrice for this package line.
+      // If null, the service's defaultPrice is used for basePrice calculation.
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: true,
+      field: 'unit_price',
+    },
+    lineTotal: {
+      // VIRTUAL — quantity × unitPrice (or ServiceCatalog.defaultPrice if unitPrice is null)
+      // Not stored in DB; resolved by the service layer / application code.
+      type: DataTypes.VIRTUAL,
+      get() {
+        const qty = this.getDataValue('quantity') || 0;
+        const price = parseFloat(this.getDataValue('unitPrice') || 0);
+        return parseFloat((qty * price).toFixed(2));
+      },
     },
     isIncluded: {
       type: DataTypes.BOOLEAN,

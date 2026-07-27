@@ -20,18 +20,64 @@ function getPackageInclude() {
     {
       model: db.PackageService, as: 'services',
       include: [
-        { model: db.ServiceCatalog, as: 'service', attributes: ['id', 'name', 'category', 'unit'] },
+        { model: db.ServiceCatalog, as: 'service', attributes: ['id', 'name', 'category', 'unit', 'defaultPrice', 'serviceLevel'] },
       ],
     },
     {
       model: db.PackageAddOn, as: 'addOns',
       include: [
-        { model: db.ServiceCatalog, as: 'service', attributes: ['id', 'name', 'category'] },
+        { model: db.ServiceCatalog, as: 'service', attributes: ['id', 'name', 'category', 'serviceLevel'] },
         { model: db.User, as: 'requestedBy', attributes: ['id', 'firstName', 'lastName'] },
         { model: db.User, as: 'approvedBy', attributes: ['id', 'firstName', 'lastName'] },
       ],
     },
   ];
+}
+
+/**
+ * _recalcPackageBasePrice — Recalculates and stores the basePrice snapshot on a ClientPackage.
+ *
+ * Iterates all isIncluded=true PackageService rows for the package.
+ * For each row: effectiveUnitPrice = PackageService.unitPrice ?? ServiceCatalog.defaultPrice ?? 0
+ * basePrice = SUM( quantity * effectiveUnitPrice )
+ *
+ * Also builds a packageOverview breakdown by service level tier (BL/SL/PL/UL).
+ */
+async function _recalcPackageBasePrice(packageId) {
+  const services = await db.PackageService.findAll({
+    where: { packageId, isIncluded: true },
+    include: [{ model: db.ServiceCatalog, as: 'service', attributes: ['id', 'defaultPrice', 'serviceLevel'] }],
+  });
+
+  let total = 0;
+  const levelCounts = { BL: 0, SL: 0, PL: 0, UL: 0 };
+  const levelTotals = { BL: 0, SL: 0, PL: 0, UL: 0 };
+
+  for (const ps of services) {
+    const qty = ps.quantity || 1;
+    const effectivePrice = parseFloat(
+      ps.unitPrice != null ? ps.unitPrice : (ps.service?.defaultPrice ?? 0)
+    );
+    const lineAmount = qty * effectivePrice;
+    total += lineAmount;
+
+    // Track level breakdown
+    const level = ps.service?.serviceLevel; // e.g. 'BL-1', 'SL-2', 'UL-1'
+    if (level) {
+      const tier = level.split('-')[0]; // 'BL', 'SL', 'PL', 'UL'
+      if (levelCounts[tier] !== undefined) {
+        levelCounts[tier]++;
+        levelTotals[tier] += lineAmount;
+      }
+    }
+  }
+
+  await db.ClientPackage.update(
+    { basePrice: parseFloat(total.toFixed(2)) },
+    { where: { id: packageId } }
+  );
+
+  return { total: parseFloat(total.toFixed(2)), levelCounts, levelTotals };
 }
 
 async function assertClientExists(clientId) {
@@ -60,12 +106,13 @@ async function createPackage({ requestingUser, clientId, data, req }) {
   assertLevel(requestingUser, PACKAGE_MANAGE_MAX_LEVEL, 'Only Manager level or above can create packages');
   await assertClientExists(clientId);
 
-  const { name, packageType, billingCycle, basePrice, startDate, endDate, renewalDate, notes,
+  // basePrice is NOT accepted from user input — it is calculated from linked services.
+  const { name, packageType, billingCycle, startDate, endDate, renewalDate, notes,
           whatWeDo, whatWeDoNot, moderationScope } = data;
 
   const pkg = await db.ClientPackage.create({
     clientId, name, packageType, billingCycle,
-    basePrice: basePrice || 0,
+    basePrice: 0, // starts at 0; recalculated when services are added
     startDate, endDate, renewalDate, notes,
     whatWeDo: whatWeDo || null,
     whatWeDoNot: whatWeDoNot || null,
@@ -119,8 +166,9 @@ async function updatePackage({ requestingUser, packageId, data, req }) {
   const pkg = await assertPackageExists(packageId);
   const oldValues = pkg.toJSON();
 
+  // basePrice is excluded — it is auto-calculated from services, not user-editable.
   const fields = [
-    'name', 'packageType', 'billingCycle', 'basePrice',
+    'name', 'packageType', 'billingCycle',
     'startDate', 'endDate', 'renewalDate', 'status', 'notes',
     'whatWeDo', 'whatWeDoNot', 'moderationScope',
   ];
@@ -168,7 +216,7 @@ async function addServiceToPackage({ requestingUser, packageId, data, req }) {
   assertLevel(requestingUser, PACKAGE_MANAGE_MAX_LEVEL, 'Only Manager level or above can add services to a package');
   const pkg = await assertPackageExists(packageId);
 
-  const { serviceId, quantity, scope, frequency, ownerLabel, isIncluded, notes } = data;
+  const { serviceId, quantity, scope, frequency, ownerLabel, unitPrice, isIncluded, notes } = data;
 
   if (serviceId) {
     const svc = await db.ServiceCatalog.findByPk(serviceId);
@@ -183,13 +231,17 @@ async function addServiceToPackage({ requestingUser, packageId, data, req }) {
     packageId, serviceId, quantity, scope,
     frequency: frequency || 'MONTHLY',
     ownerLabel: ownerLabel || null,
+    unitPrice: unitPrice != null ? unitPrice : null,
     isIncluded: isIncluded !== undefined ? isIncluded : true,
     notes,
   });
 
+  // Recalculate package basePrice from all included services
+  await _recalcPackageBasePrice(packageId);
+
   const full = await db.PackageService.findByPk(ps.id, {
     include: [
-      { model: db.ServiceCatalog, as: 'service' },
+      { model: db.ServiceCatalog, as: 'service', attributes: ['id', 'name', 'category', 'unit', 'defaultPrice', 'serviceLevel'] },
     ],
   });
 
@@ -218,9 +270,12 @@ async function updatePackageService({ requestingUser, packageServiceId, data, re
     throw err;
   }
 
-  const fields = ['quantity', 'scope', 'frequency', 'ownerLabel', 'isIncluded', 'notes'];
+  const fields = ['quantity', 'scope', 'frequency', 'ownerLabel', 'unitPrice', 'isIncluded', 'notes'];
   fields.forEach(f => { if (data[f] !== undefined) ps[f] = data[f]; });
   await ps.save();
+
+  // Recalculate package basePrice from all included services
+  await _recalcPackageBasePrice(ps.packageId);
 
   await writeAuditLog({
     performedBy: requestingUser,
@@ -247,7 +302,11 @@ async function removeServiceFromPackage({ requestingUser, packageServiceId, req 
     throw err;
   }
 
+  const { packageId } = ps;
   await ps.destroy();
+
+  // Recalculate package basePrice after removal
+  await _recalcPackageBasePrice(packageId);
 
   await writeAuditLog({
     performedBy: requestingUser,
@@ -398,4 +457,6 @@ module.exports = {
   requestAddOn,
   approveAddOn,
   updateAddOnStatus,
+  // Exported for use in seed scripts / admin tools
+  recalcPackageBasePrice: _recalcPackageBasePrice,
 };

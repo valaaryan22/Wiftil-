@@ -142,6 +142,19 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: 'NEW',
       comment: 'Admin-set relationship tier label',
     },
+    clientLevel: {
+      /**
+       * Client tier — set by admin to reflect the client's service tier.
+       *   BASIC    — entry-level client
+       *   STANDARD — mid-tier client
+       *   PREMIUM  — high-value / priority client
+       */
+      type: DataTypes.ENUM('BASIC', 'STANDARD', 'PREMIUM'),
+      allowNull: true,
+      defaultValue: null,
+      field: 'client_level',
+      comment: 'Admin-set client tier: BASIC | STANDARD | PREMIUM',
+    },
     createdById: {
       type: DataTypes.UUID,
       allowNull: false,

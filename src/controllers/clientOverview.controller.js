@@ -25,6 +25,26 @@ async function updateClientScores(req, res, next) {
   } catch (e) { next(e); }
 }
 
+// ─── Client Level ─────────────────────────────────────────────────────────────
+
+async function getClientLevel(req, res, next) {
+  try {
+    const data = await clientOverviewService.getClientLevel({ clientId: req.params.clientId });
+    return successResponse(res, { data });
+  } catch (e) { next(e); }
+}
+
+async function updateClientLevel(req, res, next) {
+  try {
+    const client = await clientOverviewService.updateClientLevel({
+      requestingUser: req.user,
+      clientId: req.params.clientId,
+      level: req.body.level,
+    });
+    return successResponse(res, { message: 'Client level updated', data: client });
+  } catch (e) { next(e); }
+}
+
 // ─── Risks ────────────────────────────────────────────────────────────────────
 
 async function getRisks(req, res, next) {
@@ -74,6 +94,8 @@ async function deleteRisk(req, res, next) {
 module.exports = {
   getClientOverview,
   updateClientScores,
+  getClientLevel,
+  updateClientLevel,
   getRisks,
   createRisk,
   updateRisk,

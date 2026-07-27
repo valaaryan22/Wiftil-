@@ -6,6 +6,13 @@
  * packageType:  BASIC | STANDARD | PREMIUM | CUSTOM
  * billingCycle: MONTHLY | QUARTERLY | ANNUAL
  * status:       ACTIVE | PAUSED | CANCELLED | EXPIRED
+ *
+ * Pricing Model:
+ *   basePrice is a CALCULATED SNAPSHOT — it is NOT entered manually.
+ *   It is auto-updated by the service layer whenever PackageService rows
+ *   (the services linked to this package) are created, updated, or deleted.
+ *   Formula: SUM( quantity × effectiveUnitPrice ) for all isIncluded=true services,
+ *   where effectiveUnitPrice = PackageService.unitPrice ?? ServiceCatalog.defaultPrice.
  */
 module.exports = (sequelize, DataTypes) => {
   const ClientPackage = sequelize.define('ClientPackage', {
@@ -38,6 +45,9 @@ module.exports = (sequelize, DataTypes) => {
       field: 'billing_cycle',
     },
     basePrice: {
+      // AUTO-CALCULATED SNAPSHOT — do NOT accept from user input.
+      // Recalculated by _recalcPackageBasePrice() whenever services change.
+      // = SUM( quantity × effectiveUnitPrice ) for all isIncluded=true PackageService rows.
       type: DataTypes.DECIMAL(12, 2),
       allowNull: false,
       defaultValue: 0,

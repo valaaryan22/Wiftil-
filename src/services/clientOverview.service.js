@@ -7,7 +7,7 @@ const { sequelize, Client, ClientPayment, ClientPackage, PackageService, Package
 
 async function getClientOverview({ clientId }) {
   const client = await Client.findByPk(clientId, {
-    attributes: ['id', 'name', 'logo', 'industry', 'clientCode', 'loyaltyScore', 'healthScore', 'relationshipStatus'],
+    attributes: ['id', 'name', 'logo', 'industry', 'clientCode', 'loyaltyScore', 'healthScore', 'relationshipStatus', 'clientLevel'],
   });
   if (!client) throw Object.assign(new Error('Client not found'), { statusCode: 404 });
 
@@ -42,6 +42,7 @@ async function getClientOverview({ clientId }) {
       loyaltyScore: client.loyaltyScore,
       healthScore: client.healthScore,
       relationshipStatus: client.relationshipStatus,
+      clientLevel: client.clientLevel,
     },
     outstanding: outstandingData,
     billing: billingSummary,
@@ -88,13 +89,13 @@ async function _getPackagesSummary(clientId) {
         model: PackageService,
         as: 'services',
         required: false,
-        include: [{ model: ServiceCatalog, as: 'service', attributes: ['id', 'name', 'category', 'unit'] }],
+        include: [{ model: ServiceCatalog, as: 'service', attributes: ['id', 'name', 'category', 'unit', 'defaultPrice', 'serviceLevel'] }],
       },
       {
         model: PackageAddOn,
         as: 'addOns',
         required: false,
-        include: [{ model: ServiceCatalog, as: 'service', attributes: ['id', 'name', 'category'] }],
+        include: [{ model: ServiceCatalog, as: 'service', attributes: ['id', 'name', 'category', 'serviceLevel'] }],
       },
     ],
   });
@@ -106,14 +107,51 @@ async function _getPackagesSummary(clientId) {
     totalCount: packages.length,
     list: packages.map(p => {
       const pkg = p.toJSON();
-      // Summarise add-on financials per package
+
+      // ── Add-on financials per package ──────────────────────────────────────
       const addOnTotals = (pkg.addOns || []).reduce((acc, ao) => {
         acc.total += parseFloat(ao.totalPrice || 0);
         if (ao.status === 'APPROVED' || ao.status === 'DELIVERED') acc.pendingBilling += parseFloat(ao.totalPrice || 0);
         if (ao.status === 'BILLED') acc.billed += parseFloat(ao.totalPrice || 0);
         return acc;
       }, { total: 0, pendingBilling: 0, billed: 0 });
-      return { ...pkg, addOnSummary: addOnTotals };
+
+      // ── Service level breakdown (BL / SL / PL / UL counts & totals) ────────
+      const levelCounts = { BL: 0, SL: 0, PL: 0, UL: 0 };
+      const levelTotals = { BL: 0, SL: 0, PL: 0, UL: 0 };
+      let computedBasePrice = 0;
+
+      for (const ps of (pkg.services || [])) {
+        if (!ps.isIncluded) continue;
+        const qty = ps.quantity || 1;
+        const effectivePrice = parseFloat(
+          ps.unitPrice != null ? ps.unitPrice : (ps.service?.defaultPrice ?? 0)
+        );
+        const lineAmount = qty * effectivePrice;
+        computedBasePrice += lineAmount;
+
+        const level = ps.service?.serviceLevel; // e.g. 'BL-1', 'SL-2', 'UL-1'
+        if (level) {
+          const tier = level.split('-')[0]; // 'BL', 'SL', 'PL', 'UL'
+          if (levelCounts[tier] !== undefined) {
+            levelCounts[tier]++;
+            levelTotals[tier] += lineAmount;
+          }
+        }
+      }
+
+      const packageOverview = {
+        totalServicesIncluded: (pkg.services || []).filter(s => s.isIncluded).length,
+        computedBasePrice: parseFloat(computedBasePrice.toFixed(2)),
+        levelBreakdown: {
+          BL: { count: levelCounts.BL, total: parseFloat(levelTotals.BL.toFixed(2)) },
+          SL: { count: levelCounts.SL, total: parseFloat(levelTotals.SL.toFixed(2)) },
+          PL: { count: levelCounts.PL, total: parseFloat(levelTotals.PL.toFixed(2)) },
+          UL: { count: levelCounts.UL, total: parseFloat(levelTotals.UL.toFixed(2)) },
+        },
+      };
+
+      return { ...pkg, addOnSummary: addOnTotals, packageOverview };
     }),
   };
 }
@@ -381,7 +419,36 @@ async function updateClientScores({ requestingUser, clientId, data }) {
   }
 
   await client.update(update);
-  return client.reload({ attributes: ['id', 'name', 'loyaltyScore', 'healthScore', 'relationshipStatus'] });
+  return client.reload({ attributes: ['id', 'name', 'loyaltyScore', 'healthScore', 'relationshipStatus', 'clientLevel'] });
+}
+
+// ─── Client Level ─────────────────────────────────────────────────────────────
+
+const VALID_CLIENT_LEVELS = ['BASIC', 'STANDARD', 'PREMIUM'];
+
+async function updateClientLevel({ requestingUser, clientId, level }) {
+  if (!VALID_CLIENT_LEVELS.includes(level)) {
+    throw Object.assign(
+      new Error(`Invalid client level. Must be one of: ${VALID_CLIENT_LEVELS.join(', ')}`),
+      { statusCode: 400 }
+    );
+  }
+
+  const client = await Client.findByPk(clientId);
+  if (!client) throw Object.assign(new Error('Client not found'), { statusCode: 404 });
+
+  await client.update({ clientLevel: level });
+  return client.reload({
+    attributes: ['id', 'name', 'clientLevel', 'loyaltyScore', 'healthScore', 'relationshipStatus'],
+  });
+}
+
+async function getClientLevel({ clientId }) {
+  const client = await Client.findByPk(clientId, {
+    attributes: ['id', 'name', 'clientLevel'],
+  });
+  if (!client) throw Object.assign(new Error('Client not found'), { statusCode: 404 });
+  return client.toJSON();
 }
 
 // ─── Risk CRUD ────────────────────────────────────────────────────────────────
@@ -448,6 +515,8 @@ async function getRisks({ clientId, includeResolved = false }) {
 module.exports = {
   getClientOverview,
   updateClientScores,
+  updateClientLevel,
+  getClientLevel,
   createRisk,
   updateRisk,
   deleteRisk,

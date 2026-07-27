@@ -27,6 +27,10 @@ router.post(
     body('startDate').optional({ nullable: true }).isISO8601(),
     body('endDate').optional({ nullable: true }).isISO8601(),
     body('renewalDate').optional({ nullable: true }).isISO8601(),
+    body('notes').optional({ nullable: true }).trim(),
+    body('whatWeDo').optional({ nullable: true }).trim(),
+    body('whatWeDoNot').optional({ nullable: true }).trim(),
+    body('moderationScope').optional({ nullable: true }).trim(),
   ],
   validate,
   ctrl.createPackage

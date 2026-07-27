@@ -17,10 +17,10 @@ function assertLevel(user, maxLevel, msg) {
 async function createService({ requestingUser, data, req }) {
   assertLevel(requestingUser, PACKAGE_MANAGE_MAX_LEVEL, 'Only Manager level or above can manage service catalog');
 
-  const { name, category, description, unit, defaultPrice } = data;
+  const { name, category, serviceLevel, description, unit, defaultPrice } = data;
 
   const service = await db.ServiceCatalog.create({
-    name, category, description, unit, defaultPrice,
+    name, category, serviceLevel: serviceLevel || null, description, unit, defaultPrice,
     isActive: true,
     createdById: requestingUser.id,
   });
@@ -74,7 +74,7 @@ async function updateService({ requestingUser, id, data, req }) {
   }
 
   const oldValues = service.toJSON();
-  const fields = ['name', 'category', 'description', 'unit', 'defaultPrice', 'isActive'];
+  const fields = ['name', 'category', 'serviceLevel', 'description', 'unit', 'defaultPrice', 'isActive'];
   fields.forEach(f => { if (data[f] !== undefined) service[f] = data[f]; });
   await service.save();
 
