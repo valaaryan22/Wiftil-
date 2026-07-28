@@ -107,18 +107,76 @@ async function createDocket({ requestingUser, clientId, data, req }) {
   return full;
 }
 
-async function getAllDockets({ query }) {
+// ─── Role-based docket access helper ─────────────────────────────────────────
+
+async function _getAccessibleDocketIds(user) {
+  // Level 4 (Team Lead): dockets they are assigned to as DocketManager
+  //                       OR dockets linked to tasks assigned to them
+  if (user.roleLevel === 4) {
+    const [docketAssignments, taskAssignments] = await Promise.all([
+      db.DocketManager.findAll({
+        where: { managerId: user.id },
+        attributes: ['docketId'],
+        raw: true,
+      }),
+      db.TaskAssignment.findAll({
+        where: { teamLeadId: user.id },
+        include: [{ model: db.Task, as: 'task', attributes: ['docketId'] }],
+      }),
+    ]);
+
+    const ids = new Set();
+    docketAssignments.forEach(dm => { if (dm.docketId) ids.add(dm.docketId); });
+    taskAssignments.forEach(ta => { if (ta.task?.docketId) ids.add(ta.task.docketId); });
+    return Array.from(ids);
+  }
+
+  // Level 5+ (Employee): dockets via sub-tasks assigned to them
+  const subTaskAssignments = await db.SubTaskAssignment.findAll({
+    where: { memberId: user.id },
+    include: [{
+      model: db.SubTask, as: 'subTask', attributes: ['taskId'],
+      include: [{ model: db.Task, as: 'task', attributes: ['docketId'] }],
+    }],
+  });
+
+  const ids = new Set();
+  subTaskAssignments.forEach(sa => {
+    const docketId = sa.subTask?.task?.docketId;
+    if (docketId) ids.add(docketId);
+  });
+  return Array.from(ids);
+}
+
+async function getAllDockets({ requestingUser, query }) {
+  const page  = parseInt(query.page)  || 1;
+  const limit = parseInt(query.limit) || 20;
+  const offset = (page - 1) * limit;
+
   const where = { deletedAt: null };
 
-  if (query.status) where.status = query.status;
-  if (query.clientId) where.clientId = query.clientId;
+  if (query.status)     where.status     = query.status;
+  if (query.clientId)   where.clientId   = query.clientId;
   if (query.docketType) where.docketType = query.docketType;
 
-  return db.Docket.findAll({
+  // Level 1-3 (BOSS / ADMIN / MANAGER) → see ALL dockets
+  // Level 4   (Team Lead)              → dockets they manage or are assigned tasks in
+  // Level 5+  (Employee)               → dockets they have sub-task assignments in
+  if (requestingUser.roleLevel > 3) {
+    const accessibleIds = await _getAccessibleDocketIds(requestingUser);
+    where.id = { [Op.in]: accessibleIds };
+  }
+
+  const { count: total, rows: dockets } = await db.Docket.findAndCountAll({
     where,
     include: DOCKET_INCLUDE,
     order: [['created_at', 'DESC']],
+    offset,
+    limit,
+    distinct: true,
   });
+
+  return { dockets, total, page, limit };
 }
 
 async function getDocketsByClient({ clientId }) {
@@ -132,7 +190,7 @@ async function getDocketsByClient({ clientId }) {
   });
 }
 
-async function getDocketById({ docketId }) {
+async function getDocketById({ docketId, requestingUser }) {
   const docket = await db.Docket.findOne({
     where: { id: docketId, deletedAt: null },
     include: [
@@ -154,6 +212,17 @@ async function getDocketById({ docketId }) {
     ],
   });
   if (!docket) notFound('Docket');
+
+  // Level 4+ can only access dockets they are assigned to
+  if (requestingUser && requestingUser.roleLevel > 3) {
+    const accessibleIds = await _getAccessibleDocketIds(requestingUser);
+    if (!accessibleIds.includes(docket.id)) {
+      const err = new Error('Access denied — you are not assigned to this docket');
+      err.statusCode = HTTP_STATUS.FORBIDDEN;
+      throw err;
+    }
+  }
+
   return docket;
 }
 

@@ -73,18 +73,63 @@ async function createClient({ requestingUser, data, req }) {
   return fullClient;
 }
 
+async function _getAccessibleClientIds(user) {
+  // Level 4 (Team Lead): clients via dockets they manage OR tasks assigned to them
+  if (user.roleLevel === 4) {
+    const [docketAssignments, taskAssignments] = await Promise.all([
+      // Via DocketManager → Docket → clientId
+      db.DocketManager.findAll({
+        where: { managerId: user.id },
+        include: [{ model: db.Docket, as: 'docket', attributes: ['clientId'] }],
+      }),
+      // Via TaskAssignment → Task (with docketId) → Docket → clientId
+      db.TaskAssignment.findAll({
+        where: { teamLeadId: user.id },
+        include: [{
+          model: db.Task, as: 'task', attributes: ['docketId'],
+          include: [{ model: db.Docket, as: 'docket', attributes: ['clientId'] }],
+        }],
+      }),
+    ]);
+
+    const clientIds = new Set();
+    docketAssignments.forEach(dm => { if (dm.docket?.clientId) clientIds.add(dm.docket.clientId); });
+    taskAssignments.forEach(ta => { if (ta.task?.docket?.clientId) clientIds.add(ta.task.docket.clientId); });
+    return Array.from(clientIds);
+  }
+
+  // Level 5+ (Employee/Member): clients via sub-tasks assigned to them
+  const subTaskAssignments = await db.SubTaskAssignment.findAll({
+    where: { memberId: user.id },
+    include: [{
+      model: db.SubTask, as: 'subTask', attributes: ['taskId'],
+      include: [{
+        model: db.Task, as: 'task', attributes: ['docketId'],
+        include: [{ model: db.Docket, as: 'docket', attributes: ['clientId'] }],
+      }],
+    }],
+  });
+
+  const clientIds = new Set();
+  subTaskAssignments.forEach(sa => {
+    const clientId = sa.subTask?.task?.docket?.clientId;
+    if (clientId) clientIds.add(clientId);
+  });
+  return Array.from(clientIds);
+}
+
 async function getClients({ requestingUser, page = 1, limit = 20, search }) {
   page = parseInt(page) || 1;
   limit = parseInt(limit) || 20;
 
   const where = { deletedAt: null };
 
-  // If user is Employee (level 5+), they can only see clients they own or maybe we restrict.
-  // Assuming anyone can view clients, or at least they can only view if allowed.
-  // The prompt doesn't specify view restriction, we'll allow all authenticated users to view
-  // but if they are employees, they might only see clients they are account owner of. Let's make view global or restricted.
+  // Level 1-3 (BOSS / ADMIN / MANAGER) → see ALL clients
+  // Level 4   (Team Lead)              → see clients from their docket/task assignments
+  // Level 5+  (Employee)               → see clients from their sub-task assignments
   if (requestingUser.roleLevel > 3) {
-     where.accountOwnerId = requestingUser.id;
+    const accessibleIds = await _getAccessibleClientIds(requestingUser);
+    where.id = { [Op.in]: accessibleIds };
   }
 
   if (search) {
@@ -118,10 +163,14 @@ async function getClientById({ id, requestingUser }) {
     throw err;
   }
 
-  if (requestingUser.roleLevel > 3 && client.accountOwnerId !== requestingUser.id) {
-    const err = new Error('Access denied');
-    err.statusCode = HTTP_STATUS.FORBIDDEN;
-    throw err;
+  // Level 4+ must have an assignment that leads to this client
+  if (requestingUser.roleLevel > 3) {
+    const accessibleIds = await _getAccessibleClientIds(requestingUser);
+    if (!accessibleIds.includes(client.id)) {
+      const err = new Error('Access denied — you are not assigned to any work under this client');
+      err.statusCode = HTTP_STATUS.FORBIDDEN;
+      throw err;
+    }
   }
 
   return client;

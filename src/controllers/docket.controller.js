@@ -19,8 +19,8 @@ async function createDocket(req, res, next) {
 
 async function getAllDockets(req, res, next) {
   try {
-    const dockets = await docketService.getAllDockets({ query: req.query });
-    return successResponse(res, { data: dockets });
+    const result = await docketService.getAllDockets({ requestingUser: req.user, query: req.query });
+    return successResponse(res, { data: result.dockets, meta: { total: result.total, page: result.page, limit: result.limit } });
   } catch (e) { next(e); }
 }
 
@@ -33,7 +33,7 @@ async function getDocketsByClient(req, res, next) {
 
 async function getDocketById(req, res, next) {
   try {
-    const docket = await docketService.getDocketById({ docketId: req.params.docketId });
+    const docket = await docketService.getDocketById({ docketId: req.params.docketId, requestingUser: req.user });
     return successResponse(res, { data: docket });
   } catch (e) { next(e); }
 }

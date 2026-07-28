@@ -17,7 +17,7 @@ const ROLE_SNAP = {
 
 const CLIENT_SNAP = {
   model: db.Client, as: 'client',
-  attributes: ['id', 'companyName'],
+  attributes: ['id', 'name'],
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -399,8 +399,8 @@ async function getDashboardTickets(userId, { page, limit, status, priority, tick
   if (ticketType) where.ticketType = ticketType;
   if (search) {
     where[Op.or] = [
-      { title: { [Op.iLike]: `%${search}%` } },
-      { ticketCode: { [Op.iLike]: `%${search}%` } },
+      { title: { [Op.like]: `%${search}%` } },
+      { ticketCode: { [Op.like]: `%${search}%` } },
     ];
   }
 
@@ -409,7 +409,7 @@ async function getDashboardTickets(userId, { page, limit, status, priority, tick
     attributes: [
       'id', 'ticketCode', 'title', 'description', 'ticketType',
       'priority', 'status', 'dueDate', 'resolvedAt', 'closedAt',
-      'resolutionNote', 'createdAt', 'updatedAt',
+      'resolutionNote',
     ],
     include: [
       {
@@ -420,7 +420,7 @@ async function getDashboardTickets(userId, { page, limit, status, priority, tick
       USER_SNAP('reportedBy'),
       USER_SNAP('assignedTo'),
     ],
-    order: [['dueDate', 'ASC'], ['createdAt', 'DESC']],
+    order: [['due_date', 'ASC'], ['created_at', 'DESC']],
     limit: lim,
     offset,
     distinct: true,
