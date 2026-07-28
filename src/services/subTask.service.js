@@ -29,7 +29,7 @@ const SUBTASK_INCLUDE = [
 ];
 
 const SUBTASK_ATTRS = [
-  'id', 'taskId', 'title', 'description', 'priority', 'status',
+  'id', 'taskId', 'docketId', 'title', 'description', 'priority', 'status',
   'startDate', 'dueDate', 'estimatedHours', 'actualHours',
   'startedAt', 'completedAt', 'submittedAt', 'reviewedAt', 'reviewComment',
   'createdById', 'reviewedById', 'createdAt', 'updatedAt',

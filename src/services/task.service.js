@@ -22,13 +22,18 @@ const TASK_INCLUDE = [
     model: db.TaskAssignment, as: 'assignments',
     include: [USER_SNAP_INCLUDE('teamLead'), { model: db.User, as: 'assignedBy', attributes: ['id', 'firstName', 'lastName'] }],
   },
+  {
+    model: db.Docket, as: 'docket',
+    attributes: ['id', 'docketCode', 'title', 'docketType', 'status'],
+    required: false,
+  },
 ];
 
 const TASK_ATTRS = [
   'id', 'title', 'description', 'priority', 'status',
   'startDate', 'dueDate', 'estimatedHours', 'actualHours', 'completionPercent',
   'managerRemark', 'managerActionAt', 'submittedAt', 'approvedAt', 'completedAt',
-  'createdById', 'managerId', 'createdAt', 'updatedAt',
+  'createdById', 'managerId', 'docketId', 'createdAt', 'updatedAt',
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -70,8 +75,23 @@ async function _createNotifications(userIds, { type, title, message, entityType,
 
 // ─── Service Functions ────────────────────────────────────────────────────────
 
-async function createTask({ requestingUser, title, description, priority, startDate, dueDate, estimatedHours, managerId, req }) {
+async function createTask({ requestingUser, title, description, priority, startDate, dueDate, estimatedHours, managerId, docketId, req }) {
   assertLevel(requestingUser, TASK_CREATE_MIN_LEVEL, 'Only BOSS or ADMIN (level ≤ 2) can create main tasks');
+
+  // ── Validate docketId if provided ──────────────────────────────────────────
+  if (docketId) {
+    const docket = await db.Docket.findOne({
+      where: { id: docketId, deletedAt: null },
+      attributes: ['id', 'status'],
+    });
+    if (!docket) {
+      const err = new Error('Docket not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
+    }
+    if (['CANCELLED', 'COMPLETED'].includes(docket.status)) {
+      const err = new Error(`Cannot create tasks under a docket with status "${docket.status}"`);
+      err.statusCode = HTTP_STATUS.CONFLICT; throw err;
+    }
+  }
 
   if (managerId) {
     const mgr = await db.User.findOne({
@@ -92,6 +112,7 @@ async function createTask({ requestingUser, title, description, priority, startD
     estimatedHours: estimatedHours ? parseFloat(estimatedHours) : null,
     createdById: requestingUser.id,
     managerId:   managerId || null,
+    docketId:    docketId  || null,
     status: managerId ? TASK_STATUS.ASSIGNED : TASK_STATUS.CREATED,
   });
 
@@ -100,8 +121,8 @@ async function createTask({ requestingUser, title, description, priority, startD
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.TASK_CREATED, category: AUDIT_CATEGORY.TASK,
     entity: 'Task', entityId: task.id, entityName: task.title,
-    description: `Admin created task "${task.title}"${managerId ? ` and assigned to manager` : ''}`,
-    newValues: { title, priority, dueDate, managerId }, req,
+    description: `Admin created task "${task.title}"${docketId ? ` under docket ${docketId}` : ''}${managerId ? ` and assigned to manager` : ''}`,
+    newValues: { title, priority, dueDate, managerId, docketId }, req,
   });
 
   if (managerId) {
@@ -114,7 +135,7 @@ async function createTask({ requestingUser, title, description, priority, startD
   return created;
 }
 
-async function getTasks({ requestingUser, page = 1, limit = 20, status, priority, search }) {
+async function getTasks({ requestingUser, page = 1, limit = 20, status, priority, search, docketId }) {
   page  = parseInt(page);
   limit = parseInt(limit);
 
@@ -129,6 +150,7 @@ async function getTasks({ requestingUser, page = 1, limit = 20, status, priority
 
   if (status)   where.status   = status;
   if (priority) where.priority = priority;
+  if (docketId) where.docketId = docketId;  // ← filter by docket
   if (search) {
     where[Op.or] = [
       { title:       { [Op.like]: `%${search}%` } },
