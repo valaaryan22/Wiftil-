@@ -3,6 +3,7 @@
 const { Op }            = require('sequelize');
 const { db }            = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
+const dateChangeRequestService = require('./dateChangeRequest.service');
 const { HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION, SUBTASK_STATUS, SUBTASK_CREATE_MIN_LEVEL } = require('../constants');
 
 // ─── Includes ─────────────────────────────────────────────────────────────────
@@ -198,6 +199,28 @@ async function updateSubTask({ requestingUser, taskId, id, data, req }) {
   const editable = ['CREATED', 'ASSIGNED', 'LOCKED', 'AVAILABLE'];
   if (!editable.includes(subTask.status)) conflict(`Cannot edit sub-task in status "${subTask.status}"`);
 
+  // ── Date-change approval gate ────────────────────────────────────────────────
+  // Level > 2 (MANAGER and below) cannot change dates directly — route to approval flow.
+  // Only BOSS (level 1) and ADMIN (level 2) may apply dates immediately.
+  const DATE_FIELDS = ['startDate', 'dueDate'];
+  const hasDateChange = DATE_FIELDS.some(f => data[f] !== undefined);
+  let pendingDateRequest = null;
+
+  if (hasDateChange && requestingUser.roleLevel > 2) {
+    const requestedStartDate = data.startDate;
+    const requestedEndDate   = data.dueDate;
+    DATE_FIELDS.forEach(f => delete data[f]);
+
+    pendingDateRequest = await dateChangeRequestService.requestDateChange({
+      requestingUser,
+      entityType: 'SubTask',
+      entityId: id,
+      requestedStartDate,
+      requestedEndDate,
+      req,
+    });
+  }
+
   const allowed = ['title', 'description', 'priority', 'startDate', 'dueDate', 'estimatedHours'];
   const updateData = {};
   allowed.forEach(f => { if (data[f] !== undefined) updateData[f] = data[f]; });
@@ -217,7 +240,8 @@ async function updateSubTask({ requestingUser, taskId, id, data, req }) {
     description: `Updated sub-task "${subTask.title}"`, oldValues: subTask.toJSON(), newValues: updateData, req,
   });
 
-  return getFullSubTask(id);
+  const updated = await getFullSubTask(id);
+  return pendingDateRequest ? { subTask: updated, pendingDateRequest } : updated;
 }
 
 async function deleteSubTask({ requestingUser, taskId, id, req }) {

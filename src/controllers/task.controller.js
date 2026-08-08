@@ -6,7 +6,16 @@ const { successResponse, paginatedResponse } = require('../utils/response');
 const createTask      = async (req, res, next) => { try { const data = await taskService.createTask({ requestingUser: req.user, ...req.body, req }); successResponse(res, { statusCode: 201, message: 'Task created', data: { task: data } }); } catch (e) { next(e); } };
 const getTasks        = async (req, res, next) => { try { const { page = 1, limit = 20, status, priority, search, docketId } = req.query; const { tasks, total } = await taskService.getTasks({ requestingUser: req.user, page, limit, status, priority, search, docketId }); paginatedResponse(res, { data: tasks, total, page, limit, message: 'Tasks fetched' }); } catch (e) { next(e); } };
 const getTaskById     = async (req, res, next) => { try { const task = await taskService.getTaskById({ id: req.params.id, requestingUser: req.user }); successResponse(res, { data: { task } }); } catch (e) { next(e); } };
-const updateTask      = async (req, res, next) => { try { const task = await taskService.updateTask({ id: req.params.id, requestingUser: req.user, data: req.body, req }); successResponse(res, { message: 'Task updated', data: { task } }); } catch (e) { next(e); } };
+const updateTask      = async (req, res, next) => {
+  try {
+    const result = await taskService.updateTask({ id: req.params.id, requestingUser: req.user, data: req.body, req });
+    if (result.pendingDateRequest) {
+      successResponse(res, { message: 'Task updated', data: result });
+    } else {
+      successResponse(res, { message: 'Task updated', data: { task: result } });
+    }
+  } catch (e) { next(e); }
+};
 const deleteTask      = async (req, res, next) => { try { await taskService.deleteTask({ id: req.params.id, requestingUser: req.user, req }); successResponse(res, { statusCode: 200, message: 'Task deleted' }); } catch (e) { next(e); } };
 const assignManager   = async (req, res, next) => { try { const task = await taskService.assignManager({ id: req.params.id, requestingUser: req.user, ...req.body, req }); successResponse(res, { message: 'Manager assigned', data: { task } }); } catch (e) { next(e); } };
 const acceptTask      = async (req, res, next) => { try { const task = await taskService.acceptTask({ id: req.params.id, requestingUser: req.user, ...req.body, req }); successResponse(res, { message: 'Task accepted', data: { task } }); } catch (e) { next(e); } };

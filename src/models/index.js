@@ -54,6 +54,8 @@ const modelFiles = [
   require('./ClientPayment.js')(sequelize, Sequelize.DataTypes),
   // Client Risk module
   require('./ClientRisk.js')(sequelize, Sequelize.DataTypes),
+  // Date Change Requests (approval workflow for level > 3 users)
+  require('./DateChangeRequest.js')(sequelize, Sequelize.DataTypes),
 ];
 
 modelFiles.forEach(model => {

@@ -6,7 +6,16 @@ const { successResponse, paginatedResponse } = require('../utils/response');
 const createSubTask    = async (req, res, next) => { try { const st = await subTaskService.createSubTask({ requestingUser: req.user, taskId: req.params.taskId, ...req.body, req }); successResponse(res, { statusCode: 201, message: 'Sub-task created', data: { subTask: st } }); } catch (e) { next(e); } };
 const getSubTasks      = async (req, res, next) => { try { const subTasks = await subTaskService.getSubTasks({ requestingUser: req.user, taskId: req.params.taskId, status: req.query.status }); successResponse(res, { data: { subTasks, total: subTasks.length } }); } catch (e) { next(e); } };
 const getSubTaskById   = async (req, res, next) => { try { const st = await subTaskService.getSubTaskById({ requestingUser: req.user, taskId: req.params.taskId, id: req.params.id }); successResponse(res, { data: { subTask: st } }); } catch (e) { next(e); } };
-const updateSubTask    = async (req, res, next) => { try { const st = await subTaskService.updateSubTask({ requestingUser: req.user, taskId: req.params.taskId, id: req.params.id, data: req.body, req }); successResponse(res, { message: 'Sub-task updated', data: { subTask: st } }); } catch (e) { next(e); } };
+const updateSubTask    = async (req, res, next) => {
+  try {
+    const result = await subTaskService.updateSubTask({ requestingUser: req.user, taskId: req.params.taskId, id: req.params.id, data: req.body, req });
+    if (result.pendingDateRequest) {
+      successResponse(res, { message: 'Sub-task updated', data: result });
+    } else {
+      successResponse(res, { message: 'Sub-task updated', data: { subTask: result } });
+    }
+  } catch (e) { next(e); }
+};
 const deleteSubTask    = async (req, res, next) => { try { await subTaskService.deleteSubTask({ requestingUser: req.user, taskId: req.params.taskId, id: req.params.id, req }); successResponse(res, { message: 'Sub-task deleted' }); } catch (e) { next(e); } };
 const assignSubTask    = async (req, res, next) => { try { const st = await subTaskService.assignSubTask({ requestingUser: req.user, taskId: req.params.taskId, id: req.params.id, ...req.body, req }); successResponse(res, { message: 'Sub-task assigned', data: { subTask: st } }); } catch (e) { next(e); } };
 const startSubTask     = async (req, res, next) => { try { const st = await subTaskService.startSubTask({ requestingUser: req.user, taskId: req.params.taskId, id: req.params.id, req }); successResponse(res, { message: 'Sub-task started', data: { subTask: st } }); } catch (e) { next(e); } };

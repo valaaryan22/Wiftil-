@@ -3,6 +3,7 @@
 const { Op, fn, col, literal } = require('sequelize');
 const { db }            = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
+const dateChangeRequestService = require('./dateChangeRequest.service');
 const {
   HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION,
   TASK_STATUS, TASK_CREATE_MIN_LEVEL, TASK_MANAGE_MIN_LEVEL,
@@ -207,6 +208,28 @@ async function updateTask({ id, requestingUser, data, req }) {
   const task = await db.Task.findOne({ where: { id, deletedAt: null }, attributes: ['id', 'title', 'status'] });
   if (!task) notFound();
 
+  // ── Date-change approval gate ────────────────────────────────────────────────
+  // Level > 2 (MANAGER and below) cannot change dates directly — route to approval flow.
+  // Only BOSS (level 1) and ADMIN (level 2) may apply dates immediately.
+  const DATE_FIELDS = ['startDate', 'dueDate'];
+  const hasDateChange = DATE_FIELDS.some(f => data[f] !== undefined);
+  let pendingDateRequest = null;
+
+  if (hasDateChange && requestingUser.roleLevel > 2) {
+    const requestedStartDate = data.startDate;
+    const requestedEndDate   = data.dueDate;   // stored as requestedEndDate in DCR
+    DATE_FIELDS.forEach(f => delete data[f]);
+
+    pendingDateRequest = await dateChangeRequestService.requestDateChange({
+      requestingUser,
+      entityType: 'Task',
+      entityId: id,
+      requestedStartDate,
+      requestedEndDate,
+      req,
+    });
+  }
+
   const allowed = ['title', 'description', 'priority', 'startDate', 'dueDate', 'estimatedHours'];
   const updateData = {};
   allowed.forEach(f => { if (data[f] !== undefined) updateData[f] = data[f]; });
@@ -220,7 +243,7 @@ async function updateTask({ id, requestingUser, data, req }) {
     description: `Updated task "${task.title}"`, oldValues: task.toJSON(), newValues: updateData, req,
   });
 
-  return updated;
+  return pendingDateRequest ? { task: updated, pendingDateRequest } : updated;
 }
 
 async function assignManager({ id, requestingUser, managerId, req }) {

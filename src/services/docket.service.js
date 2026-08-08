@@ -3,6 +3,7 @@
 const { Op } = require('sequelize');
 const { db } = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
+const dateChangeRequestService = require('./dateChangeRequest.service');
 const {
   HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION,
   PACKAGE_MANAGE_MAX_LEVEL, DOCKET_MANAGE_MAX_LEVEL,
@@ -239,6 +240,29 @@ async function updateDocket({ requestingUser, docketId, data, req }) {
     badRequest('Use the publish endpoint to publish a docket');
   }
 
+  // ── Date-change approval gate ────────────────────────────────────────────────
+  // Level > 2 users (MANAGER and below) cannot change dates directly — route to approval flow.
+  // Only BOSS (level 1) and ADMIN (level 2) may apply dates immediately.
+  const DATE_FIELDS = ['startDate', 'endDate'];
+  const hasDateChange = DATE_FIELDS.some(f => data[f] !== undefined);
+  let pendingDateRequest = null;
+
+  if (hasDateChange && requestingUser.roleLevel > 2) {
+    // Strip date fields from this update — they need manager approval
+    const requestedStartDate = data.startDate;
+    const requestedEndDate   = data.endDate;
+    DATE_FIELDS.forEach(f => delete data[f]);
+
+    pendingDateRequest = await dateChangeRequestService.requestDateChange({
+      requestingUser,
+      entityType: 'Docket',
+      entityId: docketId,
+      requestedStartDate,
+      requestedEndDate,
+      req,
+    });
+  }
+
   const fields = ['title', 'description', 'docketType', 'isTicketBased', 'status', 'startDate', 'endDate', 'packageId'];
   fields.forEach(f => { if (data[f] !== undefined) docket[f] = data[f]; });
   await docket.save();
@@ -258,7 +282,7 @@ async function updateDocket({ requestingUser, docketId, data, req }) {
     req,
   });
 
-  return full;
+  return pendingDateRequest ? { docket: full, pendingDateRequest } : full;
 }
 
 async function deleteDocket({ requestingUser, docketId, req }) {

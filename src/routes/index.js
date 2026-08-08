@@ -24,6 +24,7 @@ const docketItemRoutes   = require('./docketItem.routes');
 const clientDocumentRoutes = require('./clientDocument.routes');
 const clientPaymentRoutes  = require('./clientPayment.routes');
 const dashboardRoutes      = require('./dashboard.routes');
+const dateChangeRequestRoutes = require('./dateChangeRequest.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -65,5 +66,8 @@ router.use('/notifications',                                  notificationRoutes
 router.use('/services',  serviceRoutes);
 router.use('/packages',  packageItemRoutes);
 router.use('/dockets',   docketItemRoutes);
+
+// ── Date Change Requests module ───────────────────────────────────────────────
+router.use('/date-change-requests', dateChangeRequestRoutes);
 
 module.exports = router;
