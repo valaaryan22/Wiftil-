@@ -179,8 +179,8 @@ async function getAllInvoices({
 
   if (search) {
     where[Op.or] = [
-      { invoiceNumber: { [Op.iLike]: `%${search}%` } },
-      { description:   { [Op.iLike]: `%${search}%` } },
+      { invoiceNumber: { [Op.like]: `%${search}%` } },
+      { description:   { [Op.like]: `%${search}%` } },
     ];
   }
 
@@ -368,7 +368,171 @@ async function upsertBillingConfig({ requestingUser, clientId, data, req }) {
   ]});
 }
 
-// ── Auto Invoice Generation ───────────────────────────────────────────────────
+// ── Manual Invoice Creation ───────────────────────────────────────────────────
+
+async function createInvoice({ requestingUser, data, req }) {
+  const {
+    clientId, packageId, addOnIds = [], amount, taxRate, taxAmount,
+    discountAmount, penaltyAmount, invoiceDate, dueDate,
+    description, internalNotes, currency = 'INR',
+  } = data;
+
+  const client = await db.Client.findOne({ where: { id: clientId, deletedAt: null } });
+  if (!client) throw notFound('Client not found');
+
+  // Build line items
+  const lineItems = [];
+  let baseAmount = parseFloat(amount || 0);
+
+  if (packageId) {
+    const pkg = await db.ClientPackage.findOne({ where: { id: packageId } });
+    if (pkg) {
+      lineItems.push({
+        description: `${pkg.name} — Retainer`,
+        quantity:    1,
+        unitPrice:   parseFloat(pkg.basePrice || 0),
+        amount:      parseFloat(pkg.basePrice || 0),
+      });
+      // If no amount provided, use package base price
+      if (!amount) baseAmount = parseFloat(pkg.basePrice || 0);
+    }
+  }
+
+  if (addOnIds && addOnIds.length > 0) {
+    const addOns = await db.PackageAddOn.findAll({
+      where: { id: { [Op.in]: addOnIds } },
+      include: [{ model: db.ServiceCatalog, as: 'service', attributes: ['name'], required: false }],
+    });
+    for (const addOn of addOns) {
+      const addonAmount = parseFloat(addOn.totalPrice || addOn.unitPrice || 0);
+      lineItems.push({
+        description: addOn.service?.name || addOn.customDescription || 'Add-on',
+        quantity:    addOn.quantity || 1,
+        unitPrice:   parseFloat(addOn.unitPrice || 0),
+        amount:      addonAmount,
+      });
+      if (!packageId && !amount) baseAmount += addonAmount;
+    }
+  }
+
+  const computedTaxRate = parseFloat(taxRate || 0);
+  const computedTax = taxAmount !== undefined
+    ? parseFloat(taxAmount)
+    : parseFloat(((baseAmount * computedTaxRate) / 100).toFixed(2));
+
+  const invoice = await db.ClientPayment.create({
+    clientId,
+    packageId:     packageId || null,
+    createdById:   requestingUser.id,
+    paymentType:   'INVOICE',
+    invoiceStatus: 'DRAFT',
+    paymentStatus: 'UNPAID',
+    status:        'DRAFT',
+    invoiceDate:   invoiceDate || new Date().toISOString().slice(0, 10),
+    dueDate:       dueDate || null,
+    amount:        baseAmount,
+    taxAmount:     computedTax,
+    taxRate:       computedTaxRate || null,
+    discountAmount: parseFloat(discountAmount || 0),
+    penaltyAmount:  parseFloat(penaltyAmount || 0),
+    paidAmount:    0,
+    currency,
+    lineItems:     lineItems.length > 0 ? lineItems : null,
+    description:   description || null,
+    internalNotes: internalNotes || null,
+  });
+
+  // Mark selected add-ons as BILLED
+  if (addOnIds && addOnIds.length > 0) {
+    await db.PackageAddOn.update(
+      { status: 'BILLED', billedAt: new Date() },
+      { where: { id: { [Op.in]: addOnIds } } }
+    );
+  }
+
+  await writeAuditLog(req, {
+    category: AUDIT_CATEGORY.PAYMENT,
+    action:   AUDIT_ACTION.INVOICE_CREATED || 'INVOICE_CREATED',
+    targetModel: 'ClientPayment',
+    targetId: invoice.id,
+    details: { clientId, amount: baseAmount + computedTax },
+  });
+
+  return invoice;
+}
+
+// ── Payment Collection ────────────────────────────────────────────────────────
+
+async function collectPayment({ requestingUser, invoiceId, data, req }) {
+  const { amount, paymentMode, paidDate, referenceNumber, internalNotes } = data;
+
+  const invoice = await db.ClientPayment.findOne({
+    where: { id: invoiceId, paymentType: 'INVOICE', deletedAt: null },
+  });
+  if (!invoice) throw notFound('Invoice not found');
+  if (invoice.invoiceStatus !== 'APPROVED') {
+    const err = new Error('Invoice must be APPROVED before collecting payment');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const collectAmount = parseFloat(amount);
+  if (collectAmount <= 0) {
+    const err = new Error('Amount must be greater than 0');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Record the payment entry
+  const payment = await db.ClientPayment.create({
+    clientId:       invoice.clientId,
+    packageId:      invoice.packageId || null,
+    parentInvoiceId: invoice.id,
+    createdById:    requestingUser.id,
+    collectedById:  requestingUser.id,
+    paymentType:    'PAYMENT',
+    status:         'PAID',
+    paymentStatus:  'PAID',
+    invoiceStatus:  'APPROVED',
+    amount:         collectAmount,
+    taxAmount:      0,
+    totalAmount:    collectAmount,
+    paidAmount:     collectAmount,
+    balanceAmount:  0,
+    paidDate:       paidDate || new Date().toISOString().slice(0, 10),
+    paymentMode:    paymentMode || null,
+    referenceNumber: referenceNumber || null,
+    internalNotes:  internalNotes || null,
+    currency:       invoice.currency || 'INR',
+  });
+
+  // Update the parent invoice
+  const newPaid = parseFloat(invoice.paidAmount || 0) + collectAmount;
+  const newBalance = parseFloat(invoice.totalAmount || 0) - newPaid;
+
+  let newPaymentStatus = 'PARTIALLY_PAID';
+  if (newBalance <= 0) newPaymentStatus = 'PAID';
+
+  await invoice.update({
+    paidAmount:    parseFloat(newPaid.toFixed(2)),
+    balanceAmount: parseFloat(Math.max(0, newBalance).toFixed(2)),
+    paymentStatus: newPaymentStatus,
+    status:        newPaymentStatus === 'PAID' ? 'PAID' : 'PARTIALLY_PAID',
+    paidDate:      newPaymentStatus === 'PAID' ? (paidDate || new Date().toISOString().slice(0, 10)) : invoice.paidDate,
+    approvedById:  requestingUser.id,
+    approvedAt:    newPaymentStatus === 'PAID' ? new Date() : invoice.approvedAt,
+  });
+
+  await writeAuditLog(req, {
+    category: AUDIT_CATEGORY.PAYMENT,
+    action:   AUDIT_ACTION.PAYMENT_COLLECTED || 'PAYMENT_COLLECTED',
+    targetModel: 'ClientPayment',
+    targetId: payment.id,
+    details: { invoiceId, amount: collectAmount, newPaymentStatus },
+  });
+
+  return { payment, invoice: await invoice.reload() };
+}
 
 async function generateDueInvoices({ requestingUser, req }) {
   assertLevel(requestingUser, BILLING_CONFIG_MAX_LEVEL, 'Manager+ required to trigger invoice generation');
@@ -506,4 +670,6 @@ module.exports = {
   getBillingConfig,
   upsertBillingConfig,
   generateDueInvoices,
+  createInvoice,
+  collectPayment,
 };

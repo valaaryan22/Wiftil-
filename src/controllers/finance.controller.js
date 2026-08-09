@@ -45,8 +45,29 @@ const upsertBillingConfig = async (req, res, next) => {
 
 const generateDueInvoices = async (req, res, next) => {
   try {
-    const data = await svc.generateDueInvoices({ requestingUser: req.user, req });
+    const { generateClientInvoicesForDay } = require('../utils/invoiceCron');
+    const targetDay = parseInt(req.query.day) || new Date().getDate();
+    const data = await generateClientInvoicesForDay(targetDay, req.user.id);
     successResponse(res, { message: `Generated ${data.totalGenerated} invoice(s)`, data });
+  } catch (e) { next(e); }
+};
+
+const createInvoice = async (req, res, next) => {
+  try {
+    const data = await svc.createInvoice({ requestingUser: req.user, data: req.body, req });
+    successResponse(res, { message: 'Invoice created as draft', data: { invoice: data } });
+  } catch (e) { next(e); }
+};
+
+const collectPayment = async (req, res, next) => {
+  try {
+    const data = await svc.collectPayment({
+      requestingUser: req.user,
+      invoiceId: req.params.invoiceId,
+      data: req.body,
+      req,
+    });
+    successResponse(res, { message: 'Payment recorded successfully', data });
   } catch (e) { next(e); }
 };
 
@@ -57,4 +78,6 @@ module.exports = {
   getBillingConfig,
   upsertBillingConfig,
   generateDueInvoices,
+  createInvoice,
+  collectPayment,
 };

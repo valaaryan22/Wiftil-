@@ -4,6 +4,7 @@ require('dotenv').config();
 const app = require('./app');
 const { connectDB } = require('./database/client');
 const logger = require('./utils/logger');
+const { startInvoiceCron } = require('./utils/invoiceCron');
 
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
@@ -16,6 +17,9 @@ async function startServer() {
     const server = app.listen(PORT, () => {
       logger.info(`🚀 Wiftil API running on port ${PORT} [${NODE_ENV.toUpperCase()}]`);
       logger.info(`📋 Docs: http://localhost:${PORT}/api/v1/health`);
+
+      // Start background cron jobs
+      startInvoiceCron();
     });
 
     // Graceful shutdown

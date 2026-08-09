@@ -60,6 +60,47 @@ router.post(
   ctrl.generateDueInvoices
 );
 
+// ── Manual Invoice Creation ───────────────────────────────────────────────────
+// POST /finance/invoices
+router.post(
+  '/invoices',
+  authorizeLevel(FINANCE_MANAGE_MAX_LEVEL),
+  [
+    body('clientId').isUUID().withMessage('Valid client ID required'),
+    body('packageId').optional().isUUID(),
+    body('addOnIds').optional().isArray(),
+    body('amount').optional().isFloat({ min: 0 }).toFloat(),
+    body('taxRate').optional().isFloat({ min: 0, max: 100 }).toFloat(),
+    body('taxAmount').optional().isFloat({ min: 0 }).toFloat(),
+    body('discountAmount').optional().isFloat({ min: 0 }).toFloat(),
+    body('penaltyAmount').optional().isFloat({ min: 0 }).toFloat(),
+    body('invoiceDate').optional().isDate(),
+    body('dueDate').optional().isDate(),
+    body('description').optional().trim(),
+    body('internalNotes').optional().trim(),
+    body('currency').optional().trim().isLength({ max: 10 }),
+  ],
+  validate,
+  ctrl.createInvoice
+);
+
+// ── Payment Collection ────────────────────────────────────────────────────────
+// POST /finance/invoices/:invoiceId/collect
+router.post(
+  '/invoices/:invoiceId/collect',
+  authorizeLevel(FINANCE_MANAGE_MAX_LEVEL),
+  [
+    param('invoiceId').isUUID().withMessage('Valid invoice ID required'),
+    body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be > 0'),
+    body('paymentMode').optional().isIn(['BANK_TRANSFER', 'UPI', 'CHEQUE', 'CASH', 'CARD', 'NEFT', 'RTGS', 'IMPS', 'OTHER']),
+    body('paidDate').optional().isDate(),
+    body('referenceNumber').optional().trim(),
+    body('internalNotes').optional().trim(),
+  ],
+  validate,
+  ctrl.collectPayment
+);
+
 // ── Billing Config (per client) ───────────────────────────────────────────────
 // GET  /finance/billing-config/:clientId
 // PUT  /finance/billing-config/:clientId

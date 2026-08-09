@@ -18,6 +18,8 @@ const sequelize = new Sequelize(
     dialect: config.dialect,
     logging: config.logging,
     pool:    config.pool,
+    retry:   config.retry,
+    dialectOptions: config.dialectOptions,
   }
 );
 
