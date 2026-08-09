@@ -850,6 +850,95 @@ async function _findPayment(paymentId, clientId, requiredType) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// INVOICE APPROVAL FLOW
+// Draft → Under Review → Approved → (payment collection begins)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function submitInvoiceForReview({ requestingUser, clientId, paymentId, req }) {
+  const inv = await _assertInvoice(clientId, paymentId);
+
+  if (inv.invoiceStatus !== 'DRAFT') {
+    throw badRequest('Only DRAFT invoices can be submitted for review');
+  }
+
+  await inv.update({ invoiceStatus: 'UNDER_REVIEW' });
+
+  await writeAuditLog(req, {
+    category: AUDIT_CATEGORY.PAYMENT,
+    action:   AUDIT_ACTION.PAYMENT_INVOICE_REVIEWED,
+    targetModel: 'ClientPayment',
+    targetId: paymentId,
+    details: { invoiceNumber: inv.invoiceNumber, submittedBy: requestingUser.id },
+  });
+
+  return inv.reload({ include: INVOICE_INCLUDE });
+}
+
+async function approveInvoice({ requestingUser, clientId, paymentId, req }) {
+  assertLevel(requestingUser, PAYMENT_MANAGE_MAX_LEVEL, 'Manager+ required to approve invoices');
+  const inv = await _assertInvoice(clientId, paymentId);
+
+  if (!['DRAFT', 'UNDER_REVIEW'].includes(inv.invoiceStatus)) {
+    throw badRequest('Only DRAFT or UNDER_REVIEW invoices can be approved');
+  }
+
+  await inv.update({
+    invoiceStatus:      'APPROVED',
+    paymentStatus:      'UNPAID',
+    status:             'SENT',
+    reviewedById:       requestingUser.id,
+    reviewedAt:         new Date(),
+    invoiceApprovedById: requestingUser.id,
+    invoiceApprovedAt:  new Date(),
+  });
+
+  await writeAuditLog(req, {
+    category: AUDIT_CATEGORY.PAYMENT,
+    action:   AUDIT_ACTION.PAYMENT_INVOICE_APPROVED,
+    targetModel: 'ClientPayment',
+    targetId: paymentId,
+    details: { invoiceNumber: inv.invoiceNumber, approvedBy: requestingUser.id },
+  });
+
+  return inv.reload({ include: INVOICE_INCLUDE });
+}
+
+async function rejectInvoice({ requestingUser, clientId, paymentId, data, req }) {
+  assertLevel(requestingUser, PAYMENT_MANAGE_MAX_LEVEL, 'Manager+ required to reject invoices');
+  const inv = await _assertInvoice(clientId, paymentId);
+
+  if (inv.invoiceStatus !== 'UNDER_REVIEW') {
+    throw badRequest('Only UNDER_REVIEW invoices can be rejected back to Draft');
+  }
+
+  await inv.update({
+    invoiceStatus:   'DRAFT',
+    reviewedById:    requestingUser.id,
+    reviewedAt:      new Date(),
+    rejectionReason: data?.rejectionReason || null,
+  });
+
+  await writeAuditLog(req, {
+    category: AUDIT_CATEGORY.PAYMENT,
+    action:   AUDIT_ACTION.PAYMENT_INVOICE_REJECTED,
+    targetModel: 'ClientPayment',
+    targetId: paymentId,
+    details: { invoiceNumber: inv.invoiceNumber, rejectionReason: data?.rejectionReason },
+  });
+
+  return inv.reload({ include: INVOICE_INCLUDE });
+}
+
+// ── Helper: assert invoice exists and belongs to client ───────────────────────
+async function _assertInvoice(clientId, paymentId) {
+  const inv = await db.ClientPayment.findOne({
+    where: { id: paymentId, clientId, paymentType: 'INVOICE', deletedAt: null },
+  });
+  if (!inv) throw notFound('Invoice not found');
+  return inv;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 module.exports = {
   createInvoice,
@@ -869,4 +958,8 @@ module.exports = {
   updatePayment,
   deletePayment,
   getPaymentSummary,
+  // Invoice approval flow
+  submitInvoiceForReview,
+  approveInvoice,
+  rejectInvoice,
 };

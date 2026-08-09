@@ -4,7 +4,7 @@
  * ClientPayment — Tracks every financial transaction / collection event for a client.
  *
  * paymentType:
- *   INVOICE        — A formal invoice raised against the client (initial record, status=PENDING)
+ *   INVOICE        — A formal invoice raised against the client
  *   PAYMENT        — A payment received from the client (can be against an invoice or standalone)
  *   ADVANCE        — Advance deposit received before services start
  *   CREDIT_NOTE    — Credit issued to the client (negative outstanding)
@@ -12,16 +12,19 @@
  *   WRITE_OFF      — Uncollectable amount written off
  *   ADJUSTMENT     — Manual balance correction
  *
- * status:
- *   DRAFT          — Invoice being prepared (not yet sent)
- *   SENT           — Invoice sent to client (awaiting payment)
+ * invoiceStatus (Invoice lifecycle — separate from payment):
+ *   DRAFT          — Invoice being prepared
+ *   UNDER_REVIEW   — Submitted for manager review
+ *   APPROVED       — Approved, ready for payment collection
+ *   CANCELLED      — Invoice voided
+ *
+ * paymentStatus (Payment collection tracking):
+ *   UNPAID         — No payment received yet
  *   PARTIALLY_PAID — Partial amount received
  *   PAID           — Fully settled
- *   OVERDUE        — Past due date without full payment
- *   DISPUTED       — Client has raised a dispute
- *   CANCELLED      — Invoice/payment cancelled before collection
- *   REFUNDED       — Payment refunded to client
- *   WRITTEN_OFF    — Marked as uncollectable
+ *
+ * status (legacy combined field — kept for backward compat, mirrors invoiceStatus for non-INVOICE types):
+ *   DRAFT | SENT | PARTIALLY_PAID | PAID | OVERDUE | DISPUTED | CANCELLED | REFUNDED | WRITTEN_OFF
  *
  * paymentMode:
  *   BANK_TRANSFER | UPI | CHEQUE | CASH | CARD | NEFT | RTGS | IMPS | OTHER
@@ -105,6 +108,33 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: 'INVOICE',
       field: 'payment_type',
     },
+    /**
+     * INVOICE LIFECYCLE STATUS (separate from payment status)
+     * Only meaningful when paymentType = 'INVOICE'
+     * Draft → Under Review → Approved → Cancelled
+     */
+    invoiceStatus: {
+      type: DataTypes.ENUM('DRAFT', 'UNDER_REVIEW', 'APPROVED', 'CANCELLED'),
+      allowNull: false,
+      defaultValue: 'DRAFT',
+      field: 'invoice_status',
+      comment: 'Invoice approval lifecycle: DRAFT → UNDER_REVIEW → APPROVED → CANCELLED',
+    },
+    /**
+     * PAYMENT COLLECTION STATUS (separate from invoice lifecycle)
+     * Only meaningful when paymentType = 'INVOICE' and invoiceStatus = 'APPROVED'
+     */
+    paymentStatus: {
+      type: DataTypes.ENUM('UNPAID', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'DISPUTED', 'WRITTEN_OFF'),
+      allowNull: false,
+      defaultValue: 'UNPAID',
+      field: 'payment_status',
+      comment: 'Payment collection tracking: UNPAID → PARTIALLY_PAID → PAID',
+    },
+    /**
+     * LEGACY combined status — kept for backward compatibility.
+     * For INVOICE records, prefer invoiceStatus + paymentStatus instead.
+     */
     status: {
       type: DataTypes.ENUM(
         'DRAFT', 'SENT', 'PARTIALLY_PAID', 'PAID',
@@ -214,6 +244,53 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true,
       field: 'approved_at',
       comment: 'Timestamp when the payment was approved / verified',
+    },
+
+    // ── Invoice Review / Approval ─────────────────────────────────────────────
+    reviewedById: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: 'reviewed_by_id',
+      references: { model: 'users', key: 'id' },
+      comment: 'User who reviewed/approved the invoice (Under Review → Approved flow)',
+    },
+    reviewedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'reviewed_at',
+      comment: 'Timestamp when invoice was reviewed/approved by reviewer',
+    },
+    invoiceApprovedById: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: 'invoice_approved_by_id',
+      references: { model: 'users', key: 'id' },
+      comment: 'User who gave final approval to the invoice',
+    },
+    invoiceApprovedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'invoice_approved_at',
+    },
+    rejectionReason: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'rejection_reason',
+      comment: 'Reason provided when invoice is rejected back to DRAFT',
+    },
+    billingMonth: {
+      // For recurring invoices: 'August 2026' or '2026-08'
+      type: DataTypes.STRING(20),
+      allowNull: true,
+      field: 'billing_month',
+      comment: 'Billing period label e.g. "2026-08" for monthly invoices',
+    },
+    billingConfigId: {
+      // Link to InvoiceBillingConfig if auto-generated
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: 'billing_config_id',
+      comment: 'FK to InvoiceBillingConfig if this was auto-generated',
     },
 
     // ── Dispute / Follow-up ───────────────────────────────────────────────────
@@ -354,6 +431,18 @@ module.exports = (sequelize, DataTypes) => {
     ClientPayment.belongsTo(models.User, {
       foreignKey: 'approved_by_id',
       as: 'approvedBy',
+    });
+    ClientPayment.belongsTo(models.User, {
+      foreignKey: 'reviewed_by_id',
+      as: 'reviewedBy',
+    });
+    ClientPayment.belongsTo(models.User, {
+      foreignKey: 'invoice_approved_by_id',
+      as: 'invoiceApprovedBy',
+    });
+    ClientPayment.belongsTo(models.InvoiceBillingConfig, {
+      foreignKey: 'billing_config_id',
+      as: 'billingConfig',
     });
   };
 

@@ -227,4 +227,39 @@ module.exports = {
   writeOffInvoice,
   logFollowUp,
   getPaymentSummary,
+  // Invoice approval flow
+  submitInvoiceForReview: async (req, res, next) => {
+    try {
+      const data = await svc.submitInvoiceForReview({
+        requestingUser: req.user,
+        clientId: req.params.clientId,
+        paymentId: req.params.paymentId,
+        req,
+      });
+      successResponse(res, { message: 'Invoice submitted for review', data: { payment: data } });
+    } catch (e) { next(e); }
+  },
+  approveInvoice: async (req, res, next) => {
+    try {
+      const data = await svc.approveInvoice({
+        requestingUser: req.user,
+        clientId: req.params.clientId,
+        paymentId: req.params.paymentId,
+        req,
+      });
+      successResponse(res, { message: 'Invoice approved', data: { payment: data } });
+    } catch (e) { next(e); }
+  },
+  rejectInvoice: async (req, res, next) => {
+    try {
+      const data = await svc.rejectInvoice({
+        requestingUser: req.user,
+        clientId: req.params.clientId,
+        paymentId: req.params.paymentId,
+        data: req.body,
+        req,
+      });
+      successResponse(res, { message: 'Invoice rejected back to Draft', data: { payment: data } });
+    } catch (e) { next(e); }
+  },
 };

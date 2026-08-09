@@ -25,6 +25,10 @@ const clientDocumentRoutes = require('./clientDocument.routes');
 const clientPaymentRoutes  = require('./clientPayment.routes');
 const dashboardRoutes      = require('./dashboard.routes');
 const dateChangeRequestRoutes = require('./dateChangeRequest.routes');
+// Finance & Accounting module
+const financeRoutes        = require('./finance.routes');
+const expenseRoutes        = require('./expense.routes');
+const bankAccountRoutes    = require('./bankAccount.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -69,5 +73,10 @@ router.use('/dockets',   docketItemRoutes);
 
 // ── Date Change Requests module ───────────────────────────────────────────────
 router.use('/date-change-requests', dateChangeRequestRoutes);
+
+// ── Finance & Accounting module ───────────────────────────────────────────────
+router.use('/finance',       financeRoutes);
+router.use('/expenses',      expenseRoutes);
+router.use('/bank-accounts', bankAccountRoutes);
 
 module.exports = router;

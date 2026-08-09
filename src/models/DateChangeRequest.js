@@ -22,7 +22,7 @@ module.exports = (sequelize, DataTypes) => {
     indexes: [{ fields: ['entity_type', 'entity_id'] }, { fields: ['requested_by_id'] }, { fields: ['status'] }],
   });
   DateChangeRequest.associate = function (models) {
-    DateChangeRequest.belongsTo(models.User, { foreignKey: 'requested_by_id', as: 'requestedBy' });
+    DateChangeRequest.belongsTo(models.User, { foreignKey: 'requested_by_id', as: 'requestedBy', onDelete: 'CASCADE' });
     DateChangeRequest.belongsTo(models.User, { foreignKey: 'reviewed_by_id', as: 'reviewedBy' });
   };
   return DateChangeRequest;

@@ -56,6 +56,12 @@ const modelFiles = [
   require('./ClientRisk.js')(sequelize, Sequelize.DataTypes),
   // Date Change Requests (approval workflow for level > 3 users)
   require('./DateChangeRequest.js')(sequelize, Sequelize.DataTypes),
+  // Finance & Accounting module
+  require('./ExpenseCategory.js')(sequelize, Sequelize.DataTypes),
+  require('./BankAccount.js')(sequelize, Sequelize.DataTypes),
+  require('./BankTransaction.js')(sequelize, Sequelize.DataTypes),
+  require('./Expense.js')(sequelize, Sequelize.DataTypes),
+  require('./InvoiceBillingConfig.js')(sequelize, Sequelize.DataTypes),
 ];
 
 modelFiles.forEach(model => {

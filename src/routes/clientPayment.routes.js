@@ -211,6 +211,34 @@ router.post(
   ctrl.approvePayment
 );
 
+// Invoice Approval Flow
+router.post(
+  '/:paymentId/review',
+  [clientIdParam, paymentIdParam],
+  validate,
+  ctrl.submitInvoiceForReview
+);
+
+router.post(
+  '/:paymentId/approve-invoice',
+  authorizeLevel(PAYMENT_MANAGE_MAX_LEVEL),
+  [clientIdParam, paymentIdParam],
+  validate,
+  ctrl.approveInvoice
+);
+
+router.post(
+  '/:paymentId/reject-invoice',
+  authorizeLevel(PAYMENT_MANAGE_MAX_LEVEL),
+  [
+    clientIdParam,
+    paymentIdParam,
+    body('rejectionReason').optional().trim(),
+  ],
+  validate,
+  ctrl.rejectInvoice
+);
+
 router.post(
   '/:paymentId/cancel',
   authorizeLevel(PAYMENT_MANAGE_MAX_LEVEL),
