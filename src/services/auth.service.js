@@ -57,6 +57,11 @@ async function login({ email, password, req }) {
   const user = await db.User.findOne({
     where: { email, deletedAt: null },
     include: [INCLUDE_ROLE],
+    attributes: [
+      'id', 'email', 'password', 'firstName', 'lastName', 'isActive', 'isEmailVerified',
+      'department', 'jobTitle', 'managerId', 'profilePicture',
+      'canAccessFinance', 'canAccessSalary', 'canAccessBanking',
+    ],
   });
 
   if (!user) {
@@ -79,21 +84,25 @@ async function login({ email, password, req }) {
   }
 
   const tokenPayload = {
-    sub:             user.id,
-    email:           user.email,
-    firstName:       user.firstName,
-    lastName:        user.lastName,
-    isActive:        user.isActive,
-    isEmailVerified: user.isEmailVerified,
-    department:      user.department      || null,
-    jobTitle:        user.jobTitle        || null,
-    managerId:       user.managerId       || null,
-    profilePicture:  user.profilePicture  || null,
-    roleId:          user.role.id,
-    roleName:        user.role.name,
-    roleLevel:       user.role.accessLevel,
-    roleDisplay:     user.role.displayName,
-    roleColor:       user.role.color      || null,
+    sub:              user.id,
+    email:            user.email,
+    firstName:        user.firstName,
+    lastName:         user.lastName,
+    isActive:         user.isActive,
+    isEmailVerified:  user.isEmailVerified,
+    department:       user.department      || null,
+    jobTitle:         user.jobTitle        || null,
+    managerId:        user.managerId       || null,
+    profilePicture:   user.profilePicture  || null,
+    roleId:           user.role.id,
+    roleName:         user.role.name,
+    roleLevel:        user.role.accessLevel,
+    roleDisplay:      user.role.displayName,
+    roleColor:        user.role.color      || null,
+    // Module permission flags
+    canAccessFinance: user.canAccessFinance || false,
+    canAccessSalary:  user.canAccessSalary  || false,
+    canAccessBanking: user.canAccessBanking || false,
   };
 
   const accessToken  = generateAccessToken(tokenPayload);
@@ -172,21 +181,25 @@ async function refreshTokens({ refreshToken, req }) {
 
   const { user } = storedToken;
   const tokenPayload = {
-    sub:             user.id,
-    email:           user.email,
-    firstName:       user.firstName,
-    lastName:        user.lastName,
-    isActive:        user.isActive,
-    isEmailVerified: user.isEmailVerified,
-    department:      user.department      || null,
-    jobTitle:        user.jobTitle        || null,
-    managerId:       user.managerId       || null,
-    profilePicture:  user.profilePicture  || null,
-    roleId:          user.role.id,
-    roleName:        user.role.name,
-    roleLevel:       user.role.accessLevel,
-    roleDisplay:     user.role.displayName,
-    roleColor:       user.role.color      || null,
+    sub:              user.id,
+    email:            user.email,
+    firstName:        user.firstName,
+    lastName:         user.lastName,
+    isActive:         user.isActive,
+    isEmailVerified:  user.isEmailVerified,
+    department:       user.department      || null,
+    jobTitle:         user.jobTitle        || null,
+    managerId:        user.managerId       || null,
+    profilePicture:   user.profilePicture  || null,
+    roleId:           user.role.id,
+    roleName:         user.role.name,
+    roleLevel:        user.role.accessLevel,
+    roleDisplay:      user.role.displayName,
+    roleColor:        user.role.color      || null,
+    // Module permission flags
+    canAccessFinance: user.canAccessFinance || false,
+    canAccessSalary:  user.canAccessSalary  || false,
+    canAccessBanking: user.canAccessBanking || false,
   };
   const newAccessToken = generateAccessToken(tokenPayload);
 

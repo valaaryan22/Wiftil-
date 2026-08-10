@@ -39,7 +39,8 @@ async function inviteUser({ requestingUser, data, req }) {
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
-  const { email, password, firstName, lastName, roleId: rawRole, department, jobTitle, phone, managerId, profilePicture } = data;
+  const { email, password, firstName, lastName, roleId: rawRole, department, jobTitle, phone, managerId, profilePicture,
+    canAccessFinance, canAccessSalary, canAccessBanking } = data;
 
   const existing = await db.User.findOne({ where: { email } });
   if (existing) {
@@ -59,12 +60,18 @@ async function inviteUser({ requestingUser, data, req }) {
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
+  // Level 1 (BOSS) auto-grants all permissions
+  const isBoss = requestingUser.roleLevel === 1;
+
   const user = await db.User.create({
     email,
     password: password || `Wiftil@${Math.random().toString(36).slice(2, 10)}!`,
     firstName, lastName, roleId: targetRole.id,
     department, jobTitle, phone, managerId, isEmailVerified: false,
     profilePicture,
+    canAccessFinance: canAccessFinance === true || isBoss,
+    canAccessSalary:  canAccessSalary  === true || isBoss,
+    canAccessBanking: canAccessBanking === true || isBoss,
   });
 
   const created = await db.User.findByPk(user.id, { attributes: USER_ATTRS, include: [INCLUDE_ROLE] });
@@ -158,6 +165,13 @@ async function updateUser({ id, requestingUser, data, req }) {
   const allowedFields = ['firstName', 'lastName', 'phone', 'department', 'jobTitle', 'profilePicture'];
   const updateData = {};
   allowedFields.forEach((f) => { if (data[f] !== undefined) updateData[f] = data[f]; });
+
+  // Permission flags can only be set by higher-authority users (not self)
+  if (!isSelf && isHigher && requestingUser.roleLevel <= 3) {
+    if (data.canAccessFinance !== undefined) updateData.canAccessFinance = data.canAccessFinance === true;
+    if (data.canAccessSalary  !== undefined) updateData.canAccessSalary  = data.canAccessSalary  === true;
+    if (data.canAccessBanking !== undefined) updateData.canAccessBanking = data.canAccessBanking === true;
+  }
 
   await target.update(updateData);
   userCache.invalidateUser(id);

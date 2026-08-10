@@ -176,33 +176,43 @@ async function generateClientInvoicesForDay(targetDay, systemUserId) {
 
 // ── Schedule the cron ─────────────────────────────────────────────────────────
 function startInvoiceCron() {
-  // Runs every day at 12:00 AM (midnight) server time
+  const { generatePayrollForDay } = require('../services/salary.service');
+
+  // Runs every day at 12:00 AM (midnight) IST
   cron.schedule('0 0 * * *', async () => {
-    const today = new Date();
+    const today    = new Date();
     const todayDay = today.getDate();
-    logger.info(`[InvoiceCron] 🕛 Triggered at 00:00 — checking billingDate=${todayDay}`);
+    logger.info(`[DailyCron] 🕛 Triggered at 00:00 — day=${todayDay}`);
 
     try {
-      // Find a system/admin user to attribute the creation to
+      // Find a BOSS user to attribute auto-generated records to
       const systemUser = await db.User.findOne({
         where: { roleLevel: 1, deletedAt: null },
         attributes: ['id'],
       });
 
       if (!systemUser) {
-        logger.error('[InvoiceCron] No admin user found — cannot attribute auto-generated invoices');
+        logger.error('[DailyCron] No admin user found — skipping auto-generation');
         return;
       }
 
-      await generateClientInvoicesForDay(todayDay, systemUser.id);
+      // 1. Auto-generate client invoices
+      const invoiceResult = await generateClientInvoicesForDay(todayDay, systemUser.id);
+      logger.info(`[DailyCron] 📄 Invoices: ${invoiceResult.generated.length} generated, ${invoiceResult.skipped.length} skipped`);
+
+      // 2. Auto-generate employee payroll entries
+      const payrollResult = await generatePayrollForDay(todayDay, systemUser.id);
+      logger.info(`[DailyCron] 💰 Payroll: ${payrollResult.generated.length} generated, ${payrollResult.skipped.length} skipped`);
+
     } catch (err) {
-      logger.error('[InvoiceCron] Unhandled cron error:', err);
+      logger.error('[DailyCron] Unhandled cron error:', err);
     }
   }, {
     timezone: 'Asia/Kolkata', // IST
   });
 
-  logger.info('[InvoiceCron] ✅ Daily invoice generation cron scheduled at 00:00 IST');
+  logger.info('[DailyCron] ✅ Daily cron scheduled at 00:00 IST (invoices + payroll)');
 }
 
 module.exports = { startInvoiceCron, generateClientInvoicesForDay };
+

@@ -71,6 +71,27 @@ module.exports = (sequelize, DataTypes) => {
       field: 'manager_id',
       references: { model: 'users', key: 'id' },
     },
+    // ── Module permission flags ──────────────────────────────────────────────
+    // Level 1 (BOSS) always has full access regardless of these flags.
+    // For all other levels, these flags explicitly grant access.
+    canAccessFinance: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'can_access_finance',
+    },
+    canAccessSalary: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'can_access_salary',
+    },
+    canAccessBanking: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'can_access_banking',
+    },
     deletedAt: {
       type: DataTypes.DATE,
       allowNull: true,

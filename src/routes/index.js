@@ -29,6 +29,8 @@ const dateChangeRequestRoutes = require('./dateChangeRequest.routes');
 const financeRoutes        = require('./finance.routes');
 const expenseRoutes        = require('./expense.routes');
 const bankAccountRoutes    = require('./bankAccount.routes');
+// Salary & Payroll module
+const salaryRoutes         = require('./salary.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -78,5 +80,8 @@ router.use('/date-change-requests', dateChangeRequestRoutes);
 router.use('/finance',       financeRoutes);
 router.use('/expenses',      expenseRoutes);
 router.use('/bank-accounts', bankAccountRoutes);
+
+// ── Salary & Payroll module ───────────────────────────────────────────────────
+router.use('/salary',        salaryRoutes);
 
 module.exports = router;

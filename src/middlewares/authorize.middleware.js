@@ -97,10 +97,40 @@ function authorizeSelfOrRole(roleName) {
   return authorizeSelfOrLevel(maxLevel);
 }
 
+/**
+ * authorizePermission(flag) — allows access if:
+ *   - User is Level 1 (BOSS, always full access), OR
+ *   - User has the specific permission flag set to true
+ *
+ * Permission flags on User model: canAccessFinance, canAccessSalary, canAccessBanking
+ *
+ * Usage:
+ *   router.get('/finance', authenticate, authorizePermission('canAccessFinance'), handler)
+ */
+function authorizePermission(flag) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return errorResponse(res, { statusCode: HTTP_STATUS.UNAUTHORIZED, message: 'Authentication required' });
+    }
+
+    // Level 1 (BOSS) always has full access
+    if (req.user.roleLevel === 1) return next();
+
+    // Check specific permission flag
+    if (req.user[flag] === true) return next();
+
+    return errorResponse(res, {
+      statusCode: HTTP_STATUS.FORBIDDEN,
+      message: `Access denied. You do not have permission: ${flag}`,
+    });
+  };
+}
+
 module.exports = {
   authorize,
   authorizeLevel,
   authorizeSelfOrLevel,
+  authorizePermission,
   // Legacy aliases
   authorizeMinRole,
   authorizeSelfOrRole,

@@ -56,6 +56,10 @@ const EXPENSE_MANAGE_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can manage & appr
 const BANK_MANAGE_MAX_LEVEL     = 2; // Level ≤ 2 (ADMIN+)   can manage bank accounts
 const BILLING_CONFIG_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can configure client billing
 
+// Salary & Payroll module permissions
+const SALARY_MANAGE_MAX_LEVEL   = 2; // Level ≤ 2 (ADMIN+) can set employee salaries
+const PAYROLL_VIEW_MAX_LEVEL    = 3; // Level ≤ 3 (MANAGER+) can view & approve payroll
+
 // ─── Legacy aliases (kept so old call-sites compile without mass-rename) ─────────
 // These point to the same constants under the old names.
 const LEAVE_APPROVAL_MIN_LEVEL  = LEAVE_APPROVAL_MAX_LEVEL;
@@ -174,6 +178,7 @@ const AUDIT_CATEGORY = Object.freeze({
   ADDON:   'ADDON',
   SERVICE: 'SERVICE',
   PAYMENT: 'PAYMENT',
+  SALARY:  'SALARY',
 });
 
 const AUDIT_ACTION = Object.freeze({
@@ -317,6 +322,14 @@ const AUDIT_ACTION = Object.freeze({
   BILLING_CONFIG_CREATED:  'BILLING_CONFIG_CREATED',
   BILLING_CONFIG_UPDATED:  'BILLING_CONFIG_UPDATED',
   INVOICE_AUTO_GENERATED:  'INVOICE_AUTO_GENERATED',
+  // Salary & Payroll
+  SALARY_CONFIG_CREATED:   'SALARY_CONFIG_CREATED',
+  SALARY_CONFIG_UPDATED:   'SALARY_CONFIG_UPDATED',
+  PAYROLL_GENERATED:       'PAYROLL_GENERATED',
+  PAYROLL_APPROVED:        'PAYROLL_APPROVED',
+  PAYROLL_PAID:            'PAYROLL_PAID',
+  PAYROLL_CANCELLED:       'PAYROLL_CANCELLED',
+  PAYROLL_INCENTIVE_ADDED: 'PAYROLL_INCENTIVE_ADDED',
 });
 
 module.exports = {
@@ -342,6 +355,8 @@ module.exports = {
   EXPENSE_MANAGE_MAX_LEVEL,
   BANK_MANAGE_MAX_LEVEL,
   BILLING_CONFIG_MAX_LEVEL,
+  SALARY_MANAGE_MAX_LEVEL,
+  PAYROLL_VIEW_MAX_LEVEL,
   // Legacy aliases (backward-compat)
   LEAVE_APPROVAL_MIN_LEVEL,
   USER_INVITE_MIN_LEVEL,

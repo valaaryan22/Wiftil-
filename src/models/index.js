@@ -64,6 +64,9 @@ const modelFiles = [
   require('./BankTransaction.js')(sequelize, Sequelize.DataTypes),
   require('./Expense.js')(sequelize, Sequelize.DataTypes),
   require('./InvoiceBillingConfig.js')(sequelize, Sequelize.DataTypes),
+  // Employee Salary & Payroll module
+  require('./EmployeeSalary.js')(sequelize, Sequelize.DataTypes),
+  require('./EmployeePayroll.js')(sequelize, Sequelize.DataTypes),
 ];
 
 modelFiles.forEach(model => {

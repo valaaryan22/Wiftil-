@@ -83,6 +83,10 @@ async function authenticate(req, res, next) {
         roleName:        decoded.roleName,
         roleLevel:       decoded.roleLevel,
         roleColor:       decoded.roleColor   || null,
+        // Module permission flags (embedded in JWT at login/refresh)
+        canAccessFinance: decoded.canAccessFinance || false,
+        canAccessSalary:  decoded.canAccessSalary  || false,
+        canAccessBanking: decoded.canAccessBanking || false,
         role: {
           id:          decoded.roleId       || null,
           name:        decoded.roleName,
@@ -105,6 +109,7 @@ async function authenticate(req, res, next) {
       attributes: [
         'id', 'email', 'firstName', 'lastName', 'isActive', 'isEmailVerified',
         'department', 'jobTitle', 'managerId', 'deletedAt', 'roleId', 'profilePicture',
+        'canAccessFinance', 'canAccessSalary', 'canAccessBanking',
       ],
       include: [{
         model: db.RoleDefinition, as: 'role',
