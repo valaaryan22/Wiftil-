@@ -61,6 +61,7 @@ const updateUserValidator = [
   body('phone').optional().isMobilePhone().withMessage('Invalid phone number'),
   body('department').optional().trim().isLength({ max: 100 }),
   body('jobTitle').optional().trim().isLength({ max: 100 }),
+  body('canAccessFinance').optional().isBoolean().toBoolean(),
 ];
 
 const updateRoleValidator = [

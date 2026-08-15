@@ -53,6 +53,7 @@ router.get('/:id', [param('id').isUUID()], validate, authorizeSelfOrLevel(4), us
 // PATCH /users/:id — self or higher level
 router.patch(
   '/:id',
+  upload.single('profilePic'),
   updateUserValidator,
   validate,
   authorizeSelfOrLevel(4),

@@ -168,9 +168,9 @@ async function updateUser({ id, requestingUser, data, req }) {
 
   // Permission flags can only be set by higher-authority users (not self)
   if (!isSelf && isHigher && requestingUser.roleLevel <= 3) {
-    if (data.canAccessFinance !== undefined) updateData.canAccessFinance = data.canAccessFinance === true;
-    if (data.canAccessSalary  !== undefined) updateData.canAccessSalary  = data.canAccessSalary  === true;
-    if (data.canAccessBanking !== undefined) updateData.canAccessBanking = data.canAccessBanking === true;
+    if (data.canAccessFinance !== undefined) updateData.canAccessFinance = data.canAccessFinance === true || data.canAccessFinance === 'true';
+    if (data.canAccessSalary  !== undefined) updateData.canAccessSalary  = data.canAccessSalary  === true || data.canAccessSalary === 'true';
+    if (data.canAccessBanking !== undefined) updateData.canAccessBanking = data.canAccessBanking === true || data.canAccessBanking === 'true';
   }
 
   await target.update(updateData);
