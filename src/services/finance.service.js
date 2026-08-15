@@ -124,6 +124,37 @@ async function getFinanceDashboard() {
 
   const totalBankBalance = bankAccounts.reduce((s, a) => s + parseFloat(a.currentBalance || 0), 0);
 
+  // Payroll summary — this month
+  const payrollMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const payrollRows = await db.sequelize.query(`
+    SELECT
+      status,
+      COUNT(*) AS cnt,
+      COALESCE(SUM(net_salary), 0) AS total_net
+    FROM employee_payroll
+    WHERE deleted_at IS NULL AND payroll_month = :month
+    GROUP BY status
+  `, {
+    replacements: { month: payrollMonth },
+    type: db.sequelize.QueryTypes.SELECT,
+  });
+
+  const payrollByStatus = {};
+  let payrollTotalPaid = 0;
+  let payrollTotalDraft = 0;
+  let payrollTotalApproved = 0;
+  let payrollHeadcount = 0;
+
+  for (const row of payrollRows) {
+    payrollByStatus[row.status] = {
+      count: parseInt(row.cnt || 0),
+      total: parseFloat(row.total_net || 0),
+    };
+    if (row.status === 'PAID')     { payrollTotalPaid     = parseFloat(row.total_net || 0); payrollHeadcount += parseInt(row.cnt || 0); }
+    if (row.status === 'DRAFT')    { payrollTotalDraft    = parseFloat(row.total_net || 0); payrollHeadcount += parseInt(row.cnt || 0); }
+    if (row.status === 'APPROVED') { payrollTotalApproved = parseFloat(row.total_net || 0); payrollHeadcount += parseInt(row.cnt || 0); }
+  }
+
   return {
     allTime: {
       totalInvoices:       parseInt(invoiceAgg.total_invoices || 0),
@@ -155,6 +186,14 @@ async function getFinanceDashboard() {
     bankSummary: {
       accounts:     bankAccounts,
       totalBalance: parseFloat(totalBankBalance.toFixed(2)),
+    },
+    payrollSummary: {
+      month: payrollMonth,
+      headcount: payrollHeadcount,
+      totalPaid:     payrollTotalPaid,
+      totalApproved: payrollTotalApproved,
+      totalDraft:    payrollTotalDraft,
+      byStatus: payrollByStatus,
     },
   };
 }
