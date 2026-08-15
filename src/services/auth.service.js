@@ -6,6 +6,7 @@ const { generateAccessToken, generateRefreshToken, verifyRefreshToken, getRefres
 const { writeAuditLog } = require('../utils/auditLog');
 const { TOKEN_TYPES, HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
 const userCache         = require('../utils/userCache');
+const logger            = require('../utils/logger');
 
 const INCLUDE_ROLE = { model: db.RoleDefinition, as: 'role', attributes: ['id', 'name', 'displayName', 'accessLevel'] };
 
@@ -106,7 +107,7 @@ async function login({ email, password, req }) {
   };
 
   const accessToken  = generateAccessToken(tokenPayload);
-  const refreshToken = generateRefreshToken(tokenPayload);
+  const refreshToken = generateRefreshToken({ sub: user.id });
 
   await db.Token.create({
     userId:     user.id,
@@ -168,6 +169,13 @@ async function refreshTokens({ refreshToken, req }) {
   });
 
   if (!storedToken || storedToken.isRevoked || storedToken.expiresAt < new Date()) {
+    logger.error('Refresh token validation failed', {
+      tokenFound: !!storedToken,
+      isRevoked: storedToken ? storedToken.isRevoked : null,
+      expiresAt: storedToken ? storedToken.expiresAt : null,
+      currentTime: new Date(),
+      isExpired: storedToken ? storedToken.expiresAt < new Date() : null,
+    });
     const err = new Error('Refresh token is invalid or has been revoked');
     err.statusCode = HTTP_STATUS.UNAUTHORIZED;
     throw err;
@@ -215,7 +223,7 @@ async function refreshTokens({ refreshToken, req }) {
   if (shouldRotate) {
     // Revoke old token and issue a fresh one
     await storedToken.update({ isRevoked: true });
-    outRefreshToken = generateRefreshToken(tokenPayload);
+    outRefreshToken = generateRefreshToken({ sub: user.id });
     await db.Token.create({
       userId:     user.id,
       token:      outRefreshToken,
