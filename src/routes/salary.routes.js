@@ -42,6 +42,11 @@ router.get('/payroll',
   ctrl.listPayroll,
 );
 
+router.post('/payroll',
+  authorizeLevel(2),
+  ctrl.createPayroll,
+);
+
 router.get('/payroll/:id',
   authorizePermission('canAccessSalary'),
   ctrl.getPayroll,

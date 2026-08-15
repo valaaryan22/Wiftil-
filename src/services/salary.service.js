@@ -290,6 +290,106 @@ async function cancelPayroll({ requestingUser, payrollId, req }) {
   return payroll;
 }
 
+// ── Manual Payroll Creation ────────────────────────────────────────────────────
+
+async function createPayrollManually({ requestingUser, data, req }) {
+  // Only ADMIN+ (level ≤ 2) can manually create payroll
+  if (requestingUser.roleLevel > 2) {
+    const err = new Error('Only Admin level or above can manually create payroll entries');
+    err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  }
+
+  const {
+    employeeId,
+    month,
+    baseSalary: overrideBaseSalary,
+    incentiveAmount = 0,
+    deductionAmount = 0,
+    currency,
+    notes,
+    salaryDate,
+  } = data;
+
+  if (!employeeId || !month) {
+    const err = new Error('employeeId and month (YYYY-MM) are required');
+    err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
+  }
+
+  // Validate month format YYYY-MM
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    const err = new Error('month must be in YYYY-MM format (e.g. 2026-08)');
+    err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
+  }
+
+  // Ensure employee exists
+  const employee = await db.User.findOne({ where: { id: employeeId, deletedAt: null }, attributes: USER_ATTRS });
+  if (!employee) {
+    const err = new Error('Employee not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
+  }
+
+  // Duplicate check — one payroll per employee per month
+  const existing = await db.EmployeePayroll.findOne({
+    where: { employeeId, payrollMonth: month, deletedAt: null },
+  });
+  if (existing) {
+    const err = new Error(
+      `A payroll entry already exists for ${employee.firstName} ${employee.lastName} for ${month} (status: ${existing.status})`
+    );
+    err.statusCode = HTTP_STATUS.CONFLICT; throw err;
+  }
+
+  // Try to load the employee's salary config for defaults
+  const salaryConfig = await db.EmployeeSalary.findOne({
+    where: { userId: employeeId, isActive: true, deletedAt: null },
+  });
+
+  const resolvedBaseSalary = overrideBaseSalary != null
+    ? parseFloat(overrideBaseSalary)
+    : (salaryConfig ? parseFloat(salaryConfig.baseSalary) : 0);
+
+  const resolvedCurrency = currency || (salaryConfig ? salaryConfig.currency : 'INR');
+
+  const inc = parseFloat(incentiveAmount) || 0;
+  const ded = parseFloat(deductionAmount) || 0;
+  const net = calcNet(resolvedBaseSalary, inc, ded);
+
+  const payroll = await db.EmployeePayroll.create({
+    employeeId,
+    salaryConfigId: salaryConfig ? salaryConfig.id : null,
+    baseSalary:     resolvedBaseSalary,
+    incentiveAmount: inc,
+    deductionAmount: ded,
+    netSalary:      net,
+    payrollMonth:   month,
+    salaryDate:     salaryDate ? new Date(salaryDate) : null,
+    status:         'DRAFT',
+    currency:       resolvedCurrency,
+    notes:          notes || null,
+    createdById:    requestingUser.id,
+  });
+
+  await writeAuditLog({
+    performedBy: requestingUser,
+    action: AUDIT_ACTION.PAYROLL_CREATED_MANUAL,
+    category: AUDIT_CATEGORY.SALARY,
+    entity: 'EmployeePayroll', entityId: payroll.id,
+    entityName: `${employee.firstName} ${employee.lastName}`,
+    description: `Manually created DRAFT payroll for ${employee.firstName} ${employee.lastName} — month: ${month}, net: ₹${net}`,
+    newValues: { baseSalary: resolvedBaseSalary, incentiveAmount: inc, deductionAmount: ded, net, month },
+    req,
+  });
+
+  // Re-fetch with associations for response
+  const result = await db.EmployeePayroll.findOne({
+    where: { id: payroll.id },
+    include: [
+      { model: db.User, as: 'employee', attributes: USER_ATTRS },
+    ],
+  });
+
+  return result;
+}
+
 // ── Cron: Auto-generate payroll entries ────────────────────────────────────────
 
 async function generatePayrollForDay(dayOfMonth, systemUserId) {
@@ -346,5 +446,6 @@ module.exports = {
   markPaid,
   addIncentive,
   cancelPayroll,
+  createPayrollManually,
   generatePayrollForDay,
 };

@@ -95,6 +95,15 @@ async function manualGenerate(req, res, next) {
   } catch (err) { next(err); }
 }
 
+async function createPayroll(req, res, next) {
+  try {
+    const payroll = await salaryService.createPayrollManually({
+      requestingUser: req.user, data: req.body, req,
+    });
+    return successResponse(res, { statusCode: 201, message: 'Payroll invoice created as DRAFT', data: { payroll } });
+  } catch (err) { next(err); }
+}
+
 module.exports = {
   getSalaryConfig,
   listSalaryConfigs,
@@ -106,4 +115,5 @@ module.exports = {
   addIncentive,
   cancelPayroll,
   manualGenerate,
+  createPayroll,
 };
