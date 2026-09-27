@@ -40,7 +40,7 @@ async function seed() {
     console.log('\nCreating sample users...');
 
     const boss = await db.User.create({
-      email: 'boss@wiftil.local', password: 'Boss@12345',
+      email: 'valaaryan22@gmail.com', password: 'Aryan22@',
       firstName: 'Alex', lastName: 'Boss',
       roleId: roleMap['BOSS'].id, isEmailVerified: true,
       jobTitle: 'CEO', department: 'Executive',

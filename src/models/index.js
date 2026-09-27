@@ -67,6 +67,8 @@ const modelFiles = [
   // Employee Salary & Payroll module
   require('./EmployeeSalary.js')(sequelize, Sequelize.DataTypes),
   require('./EmployeePayroll.js')(sequelize, Sequelize.DataTypes),
+  // HRM — Attendance module
+  require('./Attendance.js')(sequelize, Sequelize.DataTypes),
 ];
 
 modelFiles.forEach(model => {

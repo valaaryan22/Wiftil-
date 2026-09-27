@@ -4,6 +4,7 @@ const { Op }            = require('sequelize');
 const { db }            = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
 const { HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
+const attendanceSvc     = require('./attendance.service');
 
 const USER_ATTRS = ['id', 'email', 'firstName', 'lastName', 'department', 'jobTitle', 'profilePicture'];
 
@@ -308,6 +309,7 @@ async function createPayrollManually({ requestingUser, data, req }) {
     currency,
     notes,
     salaryDate,
+    autoAttendance = false, // NEW: auto-calculate from attendance records
   } = data;
 
   if (!employeeId || !month) {
@@ -349,8 +351,32 @@ async function createPayrollManually({ requestingUser, data, req }) {
 
   const resolvedCurrency = currency || (salaryConfig ? salaryConfig.currency : 'INR');
 
-  const inc = parseFloat(incentiveAmount) || 0;
-  const ded = parseFloat(deductionAmount) || 0;
+  let inc = parseFloat(incentiveAmount) || 0;
+  let ded = parseFloat(deductionAmount) || 0;
+  let attendanceNotes = '';
+
+  // ── Auto-calculate from attendance records ──
+  if (autoAttendance && resolvedBaseSalary > 0) {
+    try {
+      const workingDays  = attendanceSvc.workingDaysInMonth(month);
+      const absentDays   = await attendanceSvc.countAbsentDaysForMonth(employeeId, month);
+      const overtimeHrs  = await attendanceSvc.totalOvertimeHoursForMonth(employeeId, month);
+
+      const dailyRate    = resolvedBaseSalary / workingDays;
+      const leaveDed     = parseFloat((dailyRate * absentDays).toFixed(2));
+      // Overtime rate: 1.5x hourly rate (base salary / (workingDays * 8 hours))
+      const hourlyRate   = resolvedBaseSalary / (workingDays * 8);
+      const overtimeInc  = parseFloat((hourlyRate * 1.5 * overtimeHrs).toFixed(2));
+
+      ded += leaveDed;
+      inc += overtimeInc;
+      attendanceNotes = `Auto: ${absentDays} absent days → ₹${leaveDed} deducted; ${overtimeHrs}h overtime → ₹${overtimeInc} incentive.`;
+    } catch (e) {
+      // Non-fatal: fall back to manual values if attendance data is unavailable
+      console.warn('[salary.service] Attendance auto-calc failed:', e.message);
+    }
+  }
+
   const net = calcNet(resolvedBaseSalary, inc, ded);
 
   const payroll = await db.EmployeePayroll.create({
@@ -364,7 +390,7 @@ async function createPayrollManually({ requestingUser, data, req }) {
     salaryDate:     salaryDate ? new Date(salaryDate) : null,
     status:         'DRAFT',
     currency:       resolvedCurrency,
-    notes:          notes || null,
+    notes:          [notes, attendanceNotes].filter(Boolean).join(' | ') || null,
     createdById:    requestingUser.id,
   });
 
@@ -375,7 +401,7 @@ async function createPayrollManually({ requestingUser, data, req }) {
     entity: 'EmployeePayroll', entityId: payroll.id,
     entityName: `${employee.firstName} ${employee.lastName}`,
     description: `Manually created DRAFT payroll for ${employee.firstName} ${employee.lastName} — month: ${month}, net: ₹${net}`,
-    newValues: { baseSalary: resolvedBaseSalary, incentiveAmount: inc, deductionAmount: ded, net, month },
+    newValues: { baseSalary: resolvedBaseSalary, incentiveAmount: inc, deductionAmount: ded, net, month, autoAttendance },
     req,
   });
 

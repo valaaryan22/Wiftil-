@@ -236,6 +236,14 @@ module.exports = (sequelize, DataTypes) => {
       foreignKey: 'published_by_id',
       as: 'publishedDockets',
     });
+    User.hasMany(models.Attendance, {
+      foreignKey: 'user_id',
+      as: 'attendanceRecords',
+    });
+    User.hasMany(models.Attendance, {
+      foreignKey: 'marked_by_id',
+      as: 'markedAttendances',
+    });
   };
 
   return User;
