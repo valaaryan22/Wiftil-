@@ -164,6 +164,14 @@ module.exports = (sequelize, DataTypes) => {
       foreignKey: 'reviewer_id',
       as: 'reviewedLeaves',
     });
+    User.hasMany(models.LeaveAllocation, {
+      foreignKey: 'user_id',
+      as: 'leaveAllocations',
+    });
+    User.hasMany(models.LeaveAllocation, {
+      foreignKey: 'allocated_by_id',
+      as: 'allocationsGiven',
+    });
     User.hasMany(models.AuditLog, {
       foreignKey: 'performed_by_id',
       as: 'auditLogs',

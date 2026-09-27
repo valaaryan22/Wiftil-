@@ -27,6 +27,7 @@ const sequelize = new Sequelize(
 const modelFiles = [
   require('./AuditLog.js')(sequelize, Sequelize.DataTypes),
   require('./LeaveRequest.js')(sequelize, Sequelize.DataTypes),
+  require('./LeaveAllocation.js')(sequelize, Sequelize.DataTypes),
   require('./Notification.js')(sequelize, Sequelize.DataTypes),
   require('./PerformanceRating.js')(sequelize, Sequelize.DataTypes),
   require('./RoleDefinition.js')(sequelize, Sequelize.DataTypes),

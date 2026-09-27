@@ -33,6 +33,8 @@ const bankAccountRoutes    = require('./bankAccount.routes');
 const salaryRoutes         = require('./salary.routes');
 // HRM — Attendance module
 const attendanceRoutes     = require('./attendance.routes');
+// HRM — Leave Allocation module
+const leaveAllocationRoutes = require('./leaveAllocation.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -87,6 +89,9 @@ router.use('/bank-accounts', bankAccountRoutes);
 router.use('/salary',        salaryRoutes);
 
 // ── HRM — Attendance module ───────────────────────────────────────────────────
-router.use('/attendance',    attendanceRoutes);
+router.use('/attendance',         attendanceRoutes);
+
+// ── HRM — Leave Allocation module ─────────────────────────────────────────────
+router.use('/leave-allocations',  leaveAllocationRoutes);
 
 module.exports = router;

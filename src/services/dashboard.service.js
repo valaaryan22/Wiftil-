@@ -138,9 +138,20 @@ async function getDashboardSummary(userId) {
   }
 
   // ── Leaves ────────────────────────────────────────────────────────────
+  const user = await db.User.findByPk(userId, { include: ['role'] });
+  const isManager = user?.role?.accessLevel <= 3;
+  const leaveWhere = isManager ? {} : { requesterId: userId };
+  
   const [leaveTotal, leavePending] = await Promise.all([
-    db.LeaveRequest.count({ where: { requesterId: userId } }),
-    db.LeaveRequest.count({ where: { requesterId: userId, status: 'PENDING' } }),
+    db.LeaveRequest.count({ where: leaveWhere }),
+    db.LeaveRequest.count({ where: { ...leaveWhere, status: 'PENDING' } }),
+  ]);
+
+  // ── Date Change Requests ──────────────────────────────────────────────
+  const reqWhere = isManager ? {} : { requestedById: userId };
+  const [reqTotal, reqPending] = await Promise.all([
+    db.DateChangeRequest.count({ where: reqWhere }),
+    db.DateChangeRequest.count({ where: { ...reqWhere, status: 'PENDING' } }),
   ]);
 
   // ── Notifications ─────────────────────────────────────────────────────
@@ -183,6 +194,10 @@ async function getDashboardSummary(userId) {
     leaves: {
       total: leaveTotal,
       pending: leavePending,
+    },
+    requests: {
+      total: reqTotal,
+      pending: reqPending,
     },
     notifications: {
       unread: unreadNotifications,
@@ -361,7 +376,7 @@ async function getDashboardDockets(userId, { page, limit, status, search, docket
     attributes: [
       'id', 'docketCode', 'title', 'description', 'docketType',
       'isTicketBased', 'status', 'startDate', 'endDate',
-      'publishedAt', 'createdAt', 'updatedAt',
+      'publishedAt', 'created_at', 'updated_at',
     ],
     include: [
       CLIENT_SNAP,
@@ -371,7 +386,7 @@ async function getDashboardDockets(userId, { page, limit, status, search, docket
         include: [USER_SNAP('manager')],
       },
     ],
-    order: [['createdAt', 'DESC']],
+    order: [['created_at', 'DESC']],
     limit: lim,
     offset,
     distinct: true,

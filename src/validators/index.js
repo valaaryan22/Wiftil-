@@ -95,6 +95,8 @@ const createLeaveValidator = [
   body('reason')
     .trim().notEmpty().withMessage('Reason is required')
     .isLength({ max: 500 }).withMessage('Reason max 500 characters'),
+  body('isHalfDay').optional().isBoolean().toBoolean(),
+  body('halfDayType').optional().isIn(['FIRST_HALF', 'SECOND_HALF']).withMessage('Invalid half day type'),
 ];
 
 const reviewLeaveValidator = [

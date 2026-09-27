@@ -5,14 +5,16 @@ const { db }            = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
 const { HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
 
-function calcWorkingDays(startDate, endDate) {
+function calcWorkingDays(startDate, endDate, isHalfDay = false) {
   let count = 0;
   const cur = new Date(startDate);
   const end = new Date(endDate);
   while (cur <= end) {
-    const day = cur.getDay();
-    if (day !== 0 && day !== 6) count++;
+    count++;
     cur.setDate(cur.getDate() + 1);
+  }
+  if (isHalfDay && count === 1) {
+    return 0.5;
   }
   return count;
 }
@@ -27,7 +29,7 @@ const REVIEWER_INCLUDE = {
   attributes: ['id', 'firstName', 'lastName'],
 };
 
-async function createLeaveRequest({ requestingUser, leaveType, startDate, endDate, reason, req }) {
+async function createLeaveRequest({ requestingUser, leaveType, startDate, endDate, reason, isHalfDay, halfDayType, req }) {
   const requesterId = requestingUser.id;
 
   const overlap = await db.LeaveRequest.findOne({
@@ -43,15 +45,15 @@ async function createLeaveRequest({ requestingUser, leaveType, startDate, endDat
     err.statusCode = HTTP_STATUS.CONFLICT; throw err;
   }
 
-  const totalDays = calcWorkingDays(startDate, endDate);
-  const leave = await db.LeaveRequest.create({ requesterId, leaveType, startDate, endDate, totalDays, reason });
+  const totalDays = calcWorkingDays(startDate, endDate, isHalfDay);
+  const leave = await db.LeaveRequest.create({ requesterId, leaveType, startDate, endDate, totalDays, reason, halfDayType: isHalfDay ? halfDayType : null });
   const result = await db.LeaveRequest.findByPk(leave.id, { include: [REQUESTER_INCLUDE] });
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.LEAVE_APPLIED, category: AUDIT_CATEGORY.LEAVE,
     entity: 'LeaveRequest', entityId: leave.id, targetUserId: requesterId,
     targetUserName: `${requestingUser.firstName} ${requestingUser.lastName}`,
-    description: `${requestingUser.firstName} ${requestingUser.lastName} applied for ${leaveType} leave (${totalDays} working days)`,
+    description: `${requestingUser.firstName} ${requestingUser.lastName} applied for ${leaveType} leave (${totalDays} days)`,
     newValues: { leaveType, startDate, endDate, totalDays, reason }, req,
   });
 

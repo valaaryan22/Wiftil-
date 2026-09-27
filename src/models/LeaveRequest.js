@@ -42,9 +42,14 @@ module.exports = (sequelize, DataTypes) => {
       field: 'end_date',
     },
     totalDays: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.FLOAT,
       allowNull: false,
       field: 'total_days',
+    },
+    halfDayType: {
+      type: DataTypes.ENUM('FIRST_HALF', 'SECOND_HALF'),
+      allowNull: true,
+      field: 'half_day_type',
     },
     reason: {
       type: DataTypes.TEXT,
