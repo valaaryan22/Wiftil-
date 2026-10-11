@@ -26,6 +26,24 @@ router.get(
   ctrl.getAccountSummary
 );
 
+// GET /bank-accounts/transactions/all
+router.get(
+  '/transactions/all',
+  authorizeLevel(FINANCE_MANAGE_MAX_LEVEL),
+  [
+    query('page').optional().isInt({ min: 1 }).toInt(),
+    query('limit').optional().isInt({ min: 1, max: 200 }).toInt(),
+    query('search').optional().trim(),
+    query('transactionType').optional().isIn(TX_TYPES),
+    query('source').optional().isIn(TX_SOURCES),
+    query('fromDate').optional().isDate(),
+    query('toDate').optional().isDate(),
+    query('bankAccountId').optional().trim(),
+  ],
+  validate,
+  ctrl.getAllTransactions
+);
+
 // ── Bank Accounts CRUD ────────────────────────────────────────────────────────
 // GET  /bank-accounts
 // POST /bank-accounts

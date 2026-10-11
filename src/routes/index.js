@@ -31,6 +31,7 @@ const expenseRoutes        = require('./expense.routes');
 const bankAccountRoutes    = require('./bankAccount.routes');
 // Salary & Payroll module
 const salaryRoutes         = require('./salary.routes');
+const incrementPolicyRoutes = require('./incrementPolicy.routes');
 // HRM — Attendance module
 const attendanceRoutes     = require('./attendance.routes');
 // HRM — Leave Allocation module
@@ -87,6 +88,7 @@ router.use('/bank-accounts', bankAccountRoutes);
 
 // ── Salary & Payroll module ───────────────────────────────────────────────────
 router.use('/salary',        salaryRoutes);
+router.use('/increment-policies', incrementPolicyRoutes);
 
 // ── HRM — Attendance module ───────────────────────────────────────────────────
 router.use('/attendance',         attendanceRoutes);

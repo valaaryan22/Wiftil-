@@ -71,6 +71,82 @@ const collectPayment = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+const downloadInvoicePdf = async (req, res, next) => {
+  try {
+    const { getInvoiceById } = require('../services/finance.service');
+    const { generatePdf, numberToWords } = require('../utils/pdfGenerator');
+    
+    const invoice = await getInvoiceById(req.params.invoiceId);
+    
+    let items = [];
+    if (invoice.lineItems && Array.isArray(invoice.lineItems)) {
+      items = invoice.lineItems.map(item => ({
+        description: item.description,
+        tags: item.tags || [],
+        hsnCode: item.hsnCode || null,
+        notes: item.notes || null,
+        rate: parseFloat(item.unitPrice || item.amount || 0),
+        qty: item.quantity || 1,
+        unit: item.unit || 'QTY',
+        amount: parseFloat(item.amount || 0)
+      }));
+    } else {
+      // Fallback if lineItems is missing
+      items = [{
+        description: invoice.description || 'Services Rendered',
+        tags: [],
+        hsnCode: null,
+        notes: null,
+        rate: parseFloat(invoice.amount),
+        qty: 1,
+        unit: 'QTY',
+        amount: parseFloat(invoice.amount)
+      }];
+    }
+
+    const formatDate = (dateStr) => {
+      if (!dateStr) return '';
+      const d = new Date(dateStr);
+      const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      return `${d.getDate().toString().padStart(2, '0')} ${months[d.getMonth()]} ${d.getFullYear()}`;
+    };
+    
+    // Address format
+    const clientAddress = invoice.client.locationPreference || 'Address not provided';
+
+    const pdfData = {
+      clientName: invoice.client.name,
+      clientAddress: clientAddress,
+      clientGst: invoice.client.gst,
+      clientAccountCode: invoice.client.clientCode,
+      clientEmail: invoice.client.email || 'N/A',
+      clientPhone: invoice.client.phone || '',
+      invoiceNumber: invoice.invoiceNumber,
+      invoiceDate: formatDate(invoice.invoiceDate),
+      dueDate: formatDate(invoice.dueDate),
+      billingType: invoice.package ? invoice.package.packageType : 'RETAINER',
+      billingPeriod: invoice.billingMonth || (invoice.package ? invoice.package.billingCycle : 'MONTHLY'),
+      remarks: invoice.description || invoice.notes || '',
+      items: items,
+      currencySymbol: invoice.currency === 'INR' ? '₹' : (invoice.currency === 'USD' ? '$' : invoice.currency + ' '),
+      qrCodeDataUri: null,
+      subTotal: parseFloat(invoice.amount),
+      discountAmount: parseFloat(invoice.discountAmount),
+      taxableAmount: parseFloat(invoice.amount) - parseFloat(invoice.discountAmount),
+      taxRate: parseFloat(invoice.taxRate || 0),
+      taxAmount: parseFloat(invoice.taxAmount),
+      amountInWords: numberToWords(Math.round(parseFloat(invoice.totalAmount))),
+      totalAmount: parseFloat(invoice.totalAmount)
+    };
+    
+    const pdfBuffer = await generatePdf('invoice', pdfData);
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Invoice-${invoice.invoiceNumber}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (e) { next(e); }
+};
+
 module.exports = {
   getFinanceDashboard,
   getAllInvoices,
@@ -80,4 +156,5 @@ module.exports = {
   generateDueInvoices,
   createInvoice,
   collectPayment,
+  downloadInvoicePdf,
 };

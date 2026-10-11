@@ -70,16 +70,27 @@ async function upsertSalaryConfig({ requestingUser, userId, data, req }) {
     const err = new Error('Employee not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
 
-  const { baseSalary, salaryDay, currency = 'INR', effectiveFrom, notes } = data;
-
-  if (!baseSalary || !salaryDay) {
-    const err = new Error('baseSalary and salaryDay are required');
-    err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
-  }
-
   // Deactivate any existing active config
   const existing = await db.EmployeeSalary.findOne({ where: { userId, isActive: true, deletedAt: null } });
   const isNew = !existing;
+
+  const { baseSalary, salaryDay, currency, effectiveFrom, notes } = data;
+
+  const resolvedSalaryDay = (salaryDay !== undefined && salaryDay !== null && salaryDay !== '')
+    ? parseInt(salaryDay)
+    : (existing?.salaryDay || 1);
+
+  const resolvedCurrency = currency || existing?.currency || 'INR';
+
+  if (baseSalary === undefined || baseSalary === null || isNaN(parseFloat(baseSalary))) {
+    const err = new Error('baseSalary is required');
+    err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
+  }
+
+  if (!resolvedSalaryDay || resolvedSalaryDay < 1 || resolvedSalaryDay > 31) {
+    const err = new Error('salaryDay must be between 1 and 31');
+    err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
+  }
 
   if (existing) {
     await existing.update({ isActive: false });
@@ -88,8 +99,8 @@ async function upsertSalaryConfig({ requestingUser, userId, data, req }) {
   const config = await db.EmployeeSalary.create({
     userId,
     baseSalary: parseFloat(baseSalary),
-    salaryDay:  parseInt(salaryDay),
-    currency,
+    salaryDay:  resolvedSalaryDay,
+    currency:   resolvedCurrency,
     isActive: true,
     effectiveFrom: effectiveFrom || new Date(),
     notes,
@@ -102,8 +113,8 @@ async function upsertSalaryConfig({ requestingUser, userId, data, req }) {
     category: AUDIT_CATEGORY.SALARY,
     entity: 'EmployeeSalary', entityId: config.id,
     entityName: `${employee.firstName} ${employee.lastName}`,
-    description: `${isNew ? 'Set' : 'Updated'} salary config for ${employee.firstName} ${employee.lastName}: ₹${baseSalary}, day ${salaryDay}`,
-    newValues: { baseSalary, salaryDay, currency },
+    description: `${isNew ? 'Set' : 'Updated'} salary config for ${employee.firstName} ${employee.lastName}: ${resolvedCurrency} ${baseSalary}, day ${resolvedSalaryDay}`,
+    newValues: { baseSalary, salaryDay: resolvedSalaryDay, currency: resolvedCurrency },
     req,
   });
 

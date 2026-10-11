@@ -702,6 +702,19 @@ async function generateDueInvoices({ requestingUser, req }) {
   return { generated, skipped, totalGenerated: generated.length };
 }
 
+async function getInvoiceById(invoiceId) {
+  const invoice = await db.ClientPayment.findOne({
+    where: { id: invoiceId, paymentType: 'INVOICE', deletedAt: null },
+    include: [
+      { model: db.Client, as: 'client', attributes: ['id', 'name', 'clientCode', 'gst', 'locationPreference', 'email', 'phone'] },
+      { model: db.ClientPackage, as: 'package', attributes: ['id', 'name', 'packageType'], required: false },
+    ],
+  });
+  
+  if (!invoice) throw notFound('Invoice not found');
+  return invoice;
+}
+
 module.exports = {
   getFinanceDashboard,
   getAllInvoices,
@@ -711,4 +724,5 @@ module.exports = {
   generateDueInvoices,
   createInvoice,
   collectPayment,
+  getInvoiceById,
 };

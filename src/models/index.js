@@ -30,6 +30,7 @@ const modelFiles = [
   require('./LeaveAllocation.js')(sequelize, Sequelize.DataTypes),
   require('./Notification.js')(sequelize, Sequelize.DataTypes),
   require('./PerformanceRating.js')(sequelize, Sequelize.DataTypes),
+  require('./PerformanceIncrementPolicy.js')(sequelize, Sequelize.DataTypes),
   require('./RoleDefinition.js')(sequelize, Sequelize.DataTypes),
   require('./SubTask.js')(sequelize, Sequelize.DataTypes),
   require('./SubTaskAssignment.js')(sequelize, Sequelize.DataTypes),

@@ -56,6 +56,13 @@ const getTransactions = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+const getAllTransactions = async (req, res, next) => {
+  try {
+    const result = await svc.getTransactions({ bankAccountId: req.query.bankAccountId || 'all', ...req.query });
+    successResponse(res, { data: result });
+  } catch (e) { next(e); }
+};
+
 const addTransaction = async (req, res, next) => {
   try {
     const data = await svc.addTransaction({
@@ -76,5 +83,6 @@ module.exports = {
   updateBankAccount,
   deleteBankAccount,
   getTransactions,
+  getAllTransactions,
   addTransaction,
 };

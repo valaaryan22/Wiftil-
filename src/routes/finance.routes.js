@@ -40,6 +40,17 @@ router.get(
   ctrl.getAllInvoices
 );
 
+// GET /finance/invoices/:invoiceId/pdf
+router.get(
+  '/invoices/:invoiceId/pdf',
+  authorizeLevel(FINANCE_MANAGE_MAX_LEVEL),
+  [
+    param('invoiceId').isUUID().withMessage('Valid invoice ID required'),
+  ],
+  validate,
+  ctrl.downloadInvoicePdf
+);
+
 // ── Receivables ───────────────────────────────────────────────────────────────
 // GET /finance/receivables
 router.get(

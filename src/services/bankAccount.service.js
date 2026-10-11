@@ -153,7 +153,10 @@ async function getTransactions({
   fromDate, toDate, transactionType, source,
   search,
 }) {
-  const where = { bankAccountId };
+  const where = {};
+  if (bankAccountId && bankAccountId !== 'all') {
+    where.bankAccountId = bankAccountId;
+  }
 
   if (transactionType) where.transactionType = transactionType;
   if (source)         where.source           = source;
@@ -166,9 +169,9 @@ async function getTransactions({
 
   if (search) {
     where[Op.or] = [
-      { purpose:   { [Op.iLike]: `%${search}%` } },
-      { narration: { [Op.iLike]: `%${search}%` } },
-      { referenceNumber: { [Op.iLike]: `%${search}%` } },
+      { purpose:   { [Op.like]: `%${search}%` } },
+      { narration: { [Op.like]: `%${search}%` } },
+      { referenceNumber: { [Op.like]: `%${search}%` } },
     ];
   }
 
@@ -181,6 +184,7 @@ async function getTransactions({
     include: [
       { model: db.User,   as: 'createdBy', attributes: ['id', 'firstName', 'lastName'] },
       { model: db.Client, as: 'client',    attributes: ['id', 'name', 'clientCode'], required: false },
+      { model: db.BankAccount, as: 'bankAccount', attributes: ['id', 'accountName', 'accountType', 'colorCode', 'currency'], required: false },
     ],
     order: [['transaction_date', 'DESC'], ['created_at', 'DESC']],
     limit: limitNum,
@@ -322,15 +326,210 @@ async function recordExpenseInCashbook({ expense, requestingUser, req }) {
 }
 
 async function getAccountSummary() {
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const startOfMonthStr = startOfMonth.toISOString().slice(0, 10);
+
+  // 1. Bank Accounts
   const accounts = await db.BankAccount.findAll({
     where: { isActive: true, deletedAt: null },
-    attributes: ['id', 'accountName', 'accountType', 'currentBalance', 'currency', 'isDefault', 'colorCode'],
+    attributes: ['id', 'accountName', 'accountType', 'accountNumber', 'bankName', 'currentBalance', 'currency', 'isDefault', 'colorCode'],
     order: [['is_default', 'DESC'], ['account_type', 'ASC']],
   });
-
   const totalBalance = accounts.reduce((sum, a) => sum + parseFloat(a.currentBalance || 0), 0);
 
-  return { accounts, totalBalance: parseFloat(totalBalance.toFixed(2)) };
+  // 2. Collected Money (From Client Payments)
+  const [collectedAgg] = await db.sequelize.query(`
+    SELECT
+      COALESCE(SUM(paid_amount), 0) AS total_collected_all_time,
+      COALESCE(SUM(CASE WHEN payment_type = 'INVOICE' THEN paid_amount ELSE 0 END), 0) AS invoice_collected,
+      COALESCE(SUM(CASE WHEN payment_type = 'ADVANCE' THEN paid_amount ELSE 0 END), 0) AS advance_collected,
+      COALESCE(SUM(CASE WHEN payment_type = 'PAYMENT' THEN paid_amount ELSE 0 END), 0) AS direct_payment_collected,
+      COALESCE(SUM(CASE WHEN COALESCE(paid_date, invoice_date, created_at) >= :startOfMonth THEN paid_amount ELSE 0 END), 0) AS collected_this_month,
+      COUNT(CASE WHEN paid_amount > 0 THEN 1 ELSE NULL END) AS collections_count
+    FROM client_payments
+    WHERE deleted_at IS NULL AND paid_amount > 0
+  `, {
+    replacements: { startOfMonth: startOfMonthStr },
+    type: db.sequelize.QueryTypes.SELECT,
+  });
+
+  // Collections by Payment Mode
+  const collectionsByMode = await db.sequelize.query(`
+    SELECT
+      COALESCE(payment_mode, 'OTHER') AS mode,
+      COALESCE(SUM(paid_amount), 0) AS total,
+      COUNT(*) AS count
+    FROM client_payments
+    WHERE deleted_at IS NULL AND paid_amount > 0
+    GROUP BY payment_mode
+    ORDER BY total DESC
+  `, { type: db.sequelize.QueryTypes.SELECT });
+
+  // Recent Collections
+  const recentCollections = await db.ClientPayment.findAll({
+    where: {
+      deletedAt: null,
+      paidAmount: { [Op.gt]: 0 },
+    },
+    attributes: [
+      'id', 'invoiceNumber', 'paymentType', 'paymentMode', 'paidAmount',
+      'totalAmount', 'paidDate', 'invoiceDate', 'currency', 'referenceNumber', 'internalNotes'
+    ],
+    include: [{ model: db.Client, as: 'client', attributes: ['id', 'name', 'clientCode'], required: false }],
+    order: [['paid_date', 'DESC'], ['created_at', 'DESC']],
+    limit: 20,
+  });
+
+  // 3. Salaries (Employee Payroll)
+  const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const [salaryAgg] = await db.sequelize.query(`
+    SELECT
+      COALESCE(SUM(CASE WHEN status = 'PAID' THEN net_salary ELSE 0 END), 0) AS total_salary_paid_all_time,
+      COALESCE(SUM(CASE WHEN status = 'PAID' AND payroll_month = :currentMonth THEN net_salary ELSE 0 END), 0) AS salary_paid_this_month,
+      COALESCE(SUM(CASE WHEN status = 'APPROVED' THEN net_salary ELSE 0 END), 0) AS salary_approved_pending,
+      COALESCE(SUM(CASE WHEN status = 'DRAFT' THEN net_salary ELSE 0 END), 0) AS salary_draft,
+      COUNT(CASE WHEN status = 'PAID' THEN 1 ELSE NULL END) AS paid_count
+    FROM employee_payroll
+    WHERE deleted_at IS NULL
+  `, {
+    replacements: { currentMonth: currentMonthStr },
+    type: db.sequelize.QueryTypes.SELECT,
+  });
+
+  // Recent Salaries
+  const recentSalaries = await db.EmployeePayroll.findAll({
+    where: {
+      deletedAt: null,
+      status: { [Op.in]: ['PAID', 'APPROVED'] },
+    },
+    attributes: [
+      'id', 'netSalary', 'baseSalary', 'deductionAmount', 'incentiveAmount',
+      'payrollMonth', 'salaryDate', 'status',
+      ['payment_mode', 'paymentMethod'],
+      ['reference_number', 'paymentReference'],
+      'paymentMode', 'referenceNumber',
+      'paidAt'
+    ],
+    include: [{
+      model: db.User,
+      as: 'employee',
+      attributes: ['id', 'firstName', 'lastName', 'email', 'department', 'jobTitle', 'profilePicture'],
+      required: false,
+    }],
+    order: [['paid_at', 'DESC'], ['created_at', 'DESC']],
+    limit: 20,
+  });
+
+  // 4. Expenses
+  const [expenseAgg] = await db.sequelize.query(`
+    SELECT
+      COALESCE(SUM(CASE WHEN status IN ('APPROVED', 'PAID') THEN total_amount ELSE 0 END), 0) AS total_expenses_all_time,
+      COALESCE(SUM(CASE WHEN status IN ('APPROVED', 'PAID') AND expense_date >= :startOfMonth THEN total_amount ELSE 0 END), 0) AS expenses_this_month,
+      COALESCE(SUM(CASE WHEN status = 'PAID' THEN total_amount ELSE 0 END), 0) AS expenses_paid,
+      COUNT(CASE WHEN status IN ('APPROVED', 'PAID') THEN 1 ELSE NULL END) AS expense_count
+    FROM expenses
+    WHERE deleted_at IS NULL
+  `, {
+    replacements: { startOfMonth: startOfMonthStr },
+    type: db.sequelize.QueryTypes.SELECT,
+  });
+
+  // Expenses by Category
+  const expensesByCategory = await db.sequelize.query(`
+    SELECT
+      c.name AS categoryName,
+      c.color_code AS colorCode,
+      COALESCE(SUM(e.total_amount), 0) AS total,
+      COUNT(e.id) AS count
+    FROM expenses e
+    LEFT JOIN expense_categories c ON e.category_id = c.id
+    WHERE e.deleted_at IS NULL AND e.status IN ('APPROVED', 'PAID')
+    GROUP BY c.id, c.name, c.color_code
+    ORDER BY total DESC
+    LIMIT 8
+  `, { type: db.sequelize.QueryTypes.SELECT });
+
+  // Recent Expenses
+  const recentExpenses = await db.Expense.findAll({
+    where: {
+      deletedAt: null,
+      status: { [Op.in]: ['APPROVED', 'PAID'] },
+    },
+    attributes: ['id', 'title', 'totalAmount', 'expenseDate', 'status', 'paymentMode', 'vendorName'],
+    include: [
+      { model: db.ExpenseCategory, as: 'category', attributes: ['id', 'name', 'colorCode'], required: false },
+      { model: db.BankAccount, as: 'bankAccount', attributes: ['id', 'accountName', 'accountType'], required: false },
+    ],
+    order: [['expense_date', 'DESC'], ['created_at', 'DESC']],
+    limit: 20,
+  });
+
+  // 5. Consolidated Cashflow
+  const totalCollectedAllTime = parseFloat(collectedAgg?.total_collected_all_time || 0);
+  const totalCollectedThisMonth = parseFloat(collectedAgg?.collected_this_month || 0);
+
+  const totalSalaryPaidAllTime = parseFloat(salaryAgg?.total_salary_paid_all_time || 0);
+  const salaryPaidThisMonth = parseFloat(salaryAgg?.salary_paid_this_month || 0);
+
+  const totalExpensesAllTime = parseFloat(expenseAgg?.total_expenses_all_time || 0);
+  const expensesThisMonth = parseFloat(expenseAgg?.expenses_this_month || 0);
+
+  const totalOutflowsAllTime = parseFloat((totalExpensesAllTime + totalSalaryPaidAllTime).toFixed(2));
+  const totalOutflowsThisMonth = parseFloat((expensesThisMonth + salaryPaidThisMonth).toFixed(2));
+
+  const netCashflowAllTime = parseFloat((totalCollectedAllTime - totalOutflowsAllTime).toFixed(2));
+  const netCashflowThisMonth = parseFloat((totalCollectedThisMonth - totalOutflowsThisMonth).toFixed(2));
+
+  return {
+    accounts,
+    totalBalance: parseFloat(totalBalance.toFixed(2)),
+    collectedSummary: {
+      totalCollectedAllTime,
+      totalCollectedThisMonth,
+      invoiceCollected: parseFloat(collectedAgg?.invoice_collected || 0),
+      advanceCollected: parseFloat(collectedAgg?.advance_collected || 0),
+      directPaymentCollected: parseFloat(collectedAgg?.direct_payment_collected || 0),
+      collectionsCount: parseInt(collectedAgg?.collections_count || 0),
+      byMode: collectionsByMode.map(m => ({
+        mode: m.mode,
+        total: parseFloat(m.total || 0),
+        count: parseInt(m.count || 0),
+      })),
+      recentCollections,
+    },
+    salarySummary: {
+      totalSalaryPaidAllTime,
+      salaryPaidThisMonth,
+      salaryApprovedPending: parseFloat(salaryAgg?.salary_approved_pending || 0),
+      salaryDraft: parseFloat(salaryAgg?.salary_draft || 0),
+      paidCount: parseInt(salaryAgg?.paid_count || 0),
+      currentMonth: currentMonthStr,
+      recentSalaries,
+    },
+    expenseSummary: {
+      totalExpensesAllTime,
+      expensesThisMonth,
+      expensesPaid: parseFloat(expenseAgg?.expenses_paid || 0),
+      expenseCount: parseInt(expenseAgg?.expense_count || 0),
+      byCategory: expensesByCategory.map(c => ({
+        categoryName: c.categoryName || 'General',
+        colorCode: c.colorCode || '#6c5ce7',
+        total: parseFloat(c.total || 0),
+        count: parseInt(c.count || 0),
+      })),
+      recentExpenses,
+    },
+    cashflowOverview: {
+      totalInflowsAllTime: totalCollectedAllTime,
+      totalOutflowsAllTime,
+      netCashflowAllTime,
+      totalInflowsThisMonth: totalCollectedThisMonth,
+      totalOutflowsThisMonth,
+      netCashflowThisMonth,
+      liquidBankBalance: parseFloat(totalBalance.toFixed(2)),
+    },
+  };
 }
 
 module.exports = {
