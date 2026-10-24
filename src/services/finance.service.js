@@ -503,7 +503,7 @@ async function createInvoice({ requestingUser, data, req }) {
 // ── Payment Collection ────────────────────────────────────────────────────────
 
 async function collectPayment({ requestingUser, invoiceId, data, req }) {
-  const { amount, paymentMode, paidDate, referenceNumber, internalNotes } = data;
+  const { amount, paymentMode, paidDate, referenceNumber, internalNotes, bankAccountId } = data;
 
   const invoice = await db.ClientPayment.findOne({
     where: { id: invoiceId, paymentType: 'INVOICE', deletedAt: null },
@@ -567,8 +567,26 @@ async function collectPayment({ requestingUser, invoiceId, data, req }) {
     action:   AUDIT_ACTION.PAYMENT_COLLECTED || 'PAYMENT_COLLECTED',
     targetModel: 'ClientPayment',
     targetId: payment.id,
-    details: { invoiceId, amount: collectAmount, newPaymentStatus },
+    details: { invoiceId, amount: collectAmount, newPaymentStatus, bankAccountId },
   });
+
+  // If a bank account was selected, record the CREDIT transaction in bank_transactions & update account balance
+  if (bankAccountId) {
+    try {
+      const bankAccountService = require('./bankAccount.service');
+      await bankAccountService.recordPaymentInCashbook({
+        bankAccountId,
+        clientPayment: {
+          ...payment.toJSON(),
+          invoiceNumber: invoice.invoiceNumber,
+        },
+        requestingUser,
+        req,
+      });
+    } catch (bankErr) {
+      console.error('[CollectPayment] Failed to record in cashbook:', bankErr);
+    }
+  }
 
   return { payment, invoice: await invoice.reload() };
 }

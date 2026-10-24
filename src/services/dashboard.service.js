@@ -172,14 +172,19 @@ async function getDashboardSummary(userId) {
       ? +(perfRows.reduce((sum, r) => sum + r.overall, 0) / totalRatings).toFixed(2)
       : null;
 
+  const activeTaskCount = taskRows.filter((t) => t.status !== 'COMPLETED').length;
+  const activeSubTaskCount = subTaskRows.filter((s) => s.status !== 'FINAL_APPROVED').length;
+
   return {
     tasks: {
-      total: taskRows.length,
+      total: activeTaskCount,
+      allTotal: taskRows.length,
       byStatus: taskByStatus,
       overdue: taskOverdue,
     },
     subtasks: {
-      total: subTaskRows.length,
+      total: activeSubTaskCount,
+      allTotal: subTaskRows.length,
       byStatus: subTaskByStatus,
       overdue: subTaskOverdue,
     },
@@ -245,7 +250,12 @@ async function getDashboardTasks(userId, { page, limit, status, priority, search
   }
 
   const where = { [Op.or]: orConditions, deletedAt: null };
-  if (status) where.status = status;
+  if (status) {
+    where.status = status;
+  } else {
+    // Hide completed tasks from dashboard view
+    where.status = { [Op.ne]: 'COMPLETED' };
+  }
   if (priority) where.priority = priority;
   if (search) {
     where.title = { [Op.iLike]: `%${search}%` };
@@ -303,7 +313,12 @@ async function getDashboardSubTasks(userId, { page, limit, status, priority, sea
   );
 
   const where = { id: { [Op.in]: subTaskIds } };
-  if (status) where.status = status;
+  if (status) {
+    where.status = status;
+  } else {
+    // Hide completed/final-approved subtasks from dashboard view
+    where.status = { [Op.ne]: 'FINAL_APPROVED' };
+  }
   if (priority) where.priority = priority;
   if (search) where.title = { [Op.iLike]: `%${search}%` };
 

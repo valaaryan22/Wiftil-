@@ -151,8 +151,72 @@ async function deleteBankAccount({ requestingUser, id, req }) {
 async function getTransactions({
   bankAccountId, page = 1, limit = 50,
   fromDate, toDate, transactionType, source,
-  search,
+  search, includeNonBank = true,
 }) {
+  const limitNum = parseInt(limit, 10) || 50;
+  const pageNum = parseInt(page, 10) || 1;
+  const offset = (pageNum - 1) * limitNum;
+
+  // 1. If specifically querying non-bank expenses
+  if (bankAccountId === 'non-bank') {
+    const expWhere = {
+      bankAccountId: null,
+      deletedAt: null,
+    };
+    if (fromDate || toDate) {
+      expWhere.expenseDate = {};
+      if (fromDate) expWhere.expenseDate[Op.gte] = fromDate;
+      if (toDate)   expWhere.expenseDate[Op.lte] = toDate;
+    }
+    if (search) {
+      expWhere[Op.or] = [
+        { title:           { [Op.like]: `%${search}%` } },
+        { vendorName:      { [Op.like]: `%${search}%` } },
+        { referenceNumber: { [Op.like]: `%${search}%` } },
+        { description:     { [Op.like]: `%${search}%` } },
+      ];
+    }
+    const { count, rows: expRows } = await db.Expense.findAndCountAll({
+      where: expWhere,
+      include: [
+        { model: db.User,   as: 'recordedBy', attributes: ['id', 'firstName', 'lastName'], required: false },
+        { model: db.Client, as: 'client',     attributes: ['id', 'name', 'clientCode'], required: false },
+      ],
+      order: [['expense_date', 'DESC'], ['created_at', 'DESC']],
+      limit: limitNum,
+      offset,
+    });
+
+    const expTxs = expRows.map(e => ({
+      id: `exp-${e.id}`,
+      bankAccountId: null,
+      bankAccount: { id: 'non-bank', accountName: 'Cash / Direct Expense', accountType: 'CASH', colorCode: '#64748b', currency: e.currency || 'INR' },
+      transactionType: 'DEBIT',
+      amount: parseFloat(e.totalAmount || e.amount || 0),
+      runningBalance: null,
+      currency: e.currency || 'INR',
+      transactionDate: e.expenseDate,
+      source: 'EXPENSE',
+      sourceId: e.id,
+      paymentMode: e.paymentMode || 'CASH',
+      referenceNumber: e.referenceNumber || e.expenseNumber,
+      purpose: `Expense: ${e.title}${e.vendorName ? ` (${e.vendorName})` : ''}`,
+      narration: e.description,
+      isReconciled: false,
+      isNonBankExpense: true,
+      expenseStatus: e.status,
+      createdBy: e.recordedBy || null,
+      client: e.client || null,
+      createdAt: e.createdAt,
+    }));
+
+    return {
+      transactions: expTxs,
+      pagination: { total: count, page: pageNum, limit: limitNum, totalPages: Math.ceil(count / limitNum) },
+    };
+  }
+
+  // 2. Standard bank transactions query
   const where = {};
   if (bankAccountId && bankAccountId !== 'all') {
     where.bankAccountId = bankAccountId;
@@ -175,11 +239,7 @@ async function getTransactions({
     ];
   }
 
-  const limitNum = parseInt(limit, 10) || 50;
-  const pageNum = parseInt(page, 10) || 1;
-  const offset = (pageNum - 1) * limitNum;
-
-  const { count, rows } = await db.BankTransaction.findAndCountAll({
+  const { count: txCount, rows: txRows } = await db.BankTransaction.findAndCountAll({
     where,
     include: [
       { model: db.User,   as: 'createdBy', attributes: ['id', 'firstName', 'lastName'] },
@@ -187,13 +247,81 @@ async function getTransactions({
       { model: db.BankAccount, as: 'bankAccount', attributes: ['id', 'accountName', 'accountType', 'colorCode', 'currency'], required: false },
     ],
     order: [['transaction_date', 'DESC'], ['created_at', 'DESC']],
-    limit: limitNum,
-    offset,
+    limit: (!bankAccountId || bankAccountId === 'all') ? 100 : limitNum,
+    offset: (!bankAccountId || bankAccountId === 'all') ? 0 : offset,
   });
 
+  // 3. When viewing "all", also include non-bank expenses (expenses without bank account)
+  if ((!bankAccountId || bankAccountId === 'all') && includeNonBank && transactionType !== 'CREDIT' && (!source || source === 'EXPENSE')) {
+    const expWhere = {
+      bankAccountId: null,
+      deletedAt: null,
+    };
+    if (fromDate || toDate) {
+      expWhere.expenseDate = {};
+      if (fromDate) expWhere.expenseDate[Op.gte] = fromDate;
+      if (toDate)   expWhere.expenseDate[Op.lte] = toDate;
+    }
+    if (search) {
+      expWhere[Op.or] = [
+        { title:           { [Op.like]: `%${search}%` } },
+        { vendorName:      { [Op.like]: `%${search}%` } },
+        { referenceNumber: { [Op.like]: `%${search}%` } },
+        { description:     { [Op.like]: `%${search}%` } },
+      ];
+    }
+    const expRows = await db.Expense.findAll({
+      where: expWhere,
+      include: [
+        { model: db.User,   as: 'recordedBy', attributes: ['id', 'firstName', 'lastName'], required: false },
+        { model: db.Client, as: 'client',     attributes: ['id', 'name', 'clientCode'], required: false },
+      ],
+      order: [['expense_date', 'DESC'], ['created_at', 'DESC']],
+      limit: 100,
+    });
+
+    const expTxs = expRows.map(e => ({
+      id: `exp-${e.id}`,
+      bankAccountId: null,
+      bankAccount: { id: 'non-bank', accountName: 'Cash / Direct Expense', accountType: 'CASH', colorCode: '#64748b', currency: e.currency || 'INR' },
+      transactionType: 'DEBIT',
+      amount: parseFloat(e.totalAmount || e.amount || 0),
+      runningBalance: null,
+      currency: e.currency || 'INR',
+      transactionDate: e.expenseDate,
+      source: 'EXPENSE',
+      sourceId: e.id,
+      paymentMode: e.paymentMode || 'CASH',
+      referenceNumber: e.referenceNumber || e.expenseNumber,
+      purpose: `Expense: ${e.title}${e.vendorName ? ` (${e.vendorName})` : ''}`,
+      narration: e.description,
+      isReconciled: false,
+      isNonBankExpense: true,
+      expenseStatus: e.status,
+      createdBy: e.recordedBy || null,
+      client: e.client || null,
+      createdAt: e.createdAt,
+    }));
+
+    // Merge & sort chronologically
+    const merged = [...txRows, ...expTxs].sort((a, b) => {
+      const dateA = new Date(a.transactionDate).getTime();
+      const dateB = new Date(b.transactionDate).getTime();
+      return dateB - dateA;
+    });
+
+    const totalCount = merged.length;
+    const paginated = merged.slice(offset, offset + limitNum);
+
+    return {
+      transactions: paginated,
+      pagination: { total: totalCount, page: pageNum, limit: limitNum, totalPages: Math.ceil(totalCount / limitNum) || 1 },
+    };
+  }
+
   return {
-    transactions: rows,
-    pagination: { total: count, page: pageNum, limit: limitNum, totalPages: Math.ceil(count / limitNum) },
+    transactions: txRows,
+    pagination: { total: txCount, page: pageNum, limit: limitNum, totalPages: Math.ceil(txCount / limitNum) || 1 },
   };
 }
 

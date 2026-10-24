@@ -59,6 +59,17 @@ const createInvoice = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+const triggerDailyCron = async (req, res, next) => {
+  try {
+    const { runDailyCronNow } = require('../utils/invoiceCron');
+    const result = await runDailyCronNow(req.query.day || req.body?.day || null);
+    successResponse(res, {
+      message: `Daily cron executed for day ${result.day}: ${result.invoices.totalGenerated} invoices generated, ${result.payroll.generated.length} payroll entries generated`,
+      data: result,
+    });
+  } catch (e) { next(e); }
+};
+
 const collectPayment = async (req, res, next) => {
   try {
     const data = await svc.collectPayment({
@@ -154,6 +165,7 @@ module.exports = {
   getBillingConfig,
   upsertBillingConfig,
   generateDueInvoices,
+  triggerDailyCron,
   createInvoice,
   collectPayment,
   downloadInvoicePdf,

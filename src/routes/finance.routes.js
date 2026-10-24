@@ -63,12 +63,19 @@ router.get(
   ctrl.getReceivables
 );
 
-// ── Auto Invoice Generation ───────────────────────────────────────────────────
+// ── Auto Invoice Generation & Daily Cron ───────────────────────────────────────
 // POST /finance/invoices/generate-due
 router.post(
   '/invoices/generate-due',
   authorizeLevel(BILLING_CONFIG_MAX_LEVEL),
   ctrl.generateDueInvoices
+);
+
+// POST /finance/cron/run-daily (runs daily midnight cron on demand for invoices & salary)
+router.post(
+  '/cron/run-daily',
+  authorizeLevel(BILLING_CONFIG_MAX_LEVEL),
+  ctrl.triggerDailyCron
 );
 
 // ── Manual Invoice Creation ───────────────────────────────────────────────────
@@ -104,6 +111,7 @@ router.post(
     param('invoiceId').isUUID().withMessage('Valid invoice ID required'),
     body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be > 0'),
     body('paymentMode').optional().isIn(['BANK_TRANSFER', 'UPI', 'CHEQUE', 'CASH', 'CARD', 'NEFT', 'RTGS', 'IMPS', 'OTHER']),
+    body('bankAccountId').optional({ checkFalsy: true, nullable: true }).isUUID().withMessage('Valid bank account ID required'),
     body('paidDate').optional().isDate(),
     body('referenceNumber').optional().trim(),
     body('internalNotes').optional().trim(),

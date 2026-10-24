@@ -146,14 +146,22 @@ async function createExpense({ requestingUser, data, req }) {
   if (!amount || parseFloat(amount) < 0) throw badRequest('amount must be a non-negative number');
   if (!expenseDate) throw badRequest('expenseDate is required');
 
+  const finalStatus = (requestingUser.roleLevel <= EXPENSE_MANAGE_MAX_LEVEL && ['APPROVED', 'PAID'].includes(status))
+    ? 'APPROVED'
+    : (['DRAFT', 'SUBMITTED'].includes(status) ? status : 'DRAFT');
+
+  const cleanBankAccountId = (bankAccountId && bankAccountId !== 'none' && bankAccountId !== '') ? bankAccountId : null;
+  const cleanCategoryId    = (categoryId && categoryId !== 'none' && categoryId !== '') ? categoryId : null;
+  const cleanClientId      = (clientId && clientId !== 'none' && clientId !== '') ? clientId : null;
+
   const expense = await db.Expense.create({
     title: title.trim(),
-    categoryId:      categoryId      || null,
-    clientId:        clientId        || null,
-    bankAccountId:   bankAccountId   || null,
+    categoryId:      cleanCategoryId,
+    clientId:        cleanClientId,
+    bankAccountId:   cleanBankAccountId,
     vendorName:      vendorName      || null,
     description:     description     || null,
-    status:          ['DRAFT', 'SUBMITTED'].includes(status) ? status : 'DRAFT',
+    status:          finalStatus,
     paymentMode:     paymentMode     || null,
     currency:        currency        || 'INR',
     amount:          parseFloat(amount),
@@ -165,7 +173,18 @@ async function createExpense({ requestingUser, data, req }) {
     internalNotes:   internalNotes   || null,
     isBillable:      !!isBillable,
     recordedById:    requestingUser.id,
+    approvedById:    finalStatus === 'APPROVED' ? requestingUser.id : null,
+    approvedAt:      finalStatus === 'APPROVED' ? new Date() : null,
   });
+
+  // If approved upon creation and has a bank account, record debit in cashbook
+  if (finalStatus === 'APPROVED' && expense.bankAccountId) {
+    try {
+      await bankSvc.recordExpenseInCashbook({ expense, requestingUser, req });
+    } catch (bankErr) {
+      console.error('[CreateExpense] Failed to record debit in cashbook:', bankErr);
+    }
+  }
 
   await writeAuditLog(req, {
     category: AUDIT_CATEGORY.SYSTEM,
@@ -199,6 +218,15 @@ async function updateExpense({ requestingUser, id, data, req }) {
   allowedFields.forEach(f => { if (data[f] !== undefined) updates[f] = data[f]; });
   if (updates.amount) updates.amount = parseFloat(updates.amount);
   if (updates.taxAmount) updates.taxAmount = parseFloat(updates.taxAmount || 0);
+  if ('bankAccountId' in updates) {
+    updates.bankAccountId = (updates.bankAccountId && updates.bankAccountId !== 'none') ? updates.bankAccountId : null;
+  }
+  if ('categoryId' in updates) {
+    updates.categoryId = (updates.categoryId && updates.categoryId !== 'none') ? updates.categoryId : null;
+  }
+  if ('clientId' in updates) {
+    updates.clientId = (updates.clientId && updates.clientId !== 'none') ? updates.clientId : null;
+  }
 
   await expense.update(updates);
 

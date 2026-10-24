@@ -26,13 +26,37 @@ async function generateClientInvoicesForDay(targetDay, systemUserId) {
 
   logger.info(`[InvoiceCron] Running for day=${targetDay}, month=${billingMonth}`);
 
-  // 1. Find all active clients whose billing day is today
-  const clients = await db.Client.findAll({
-    where: {
-      billingDate: targetDay,
-      deletedAt:   null,
-    },
-  });
+  // 1. Find all active clients whose billing day is today OR who have active billing configs due today
+  let configClientIds = [];
+  try {
+    const billingConfigs = await db.InvoiceBillingConfig.findAll({
+      where: {
+        isActive: true,
+        [Op.or]: [
+          { billingDay: targetDay },
+          { nextDueAt: { [Op.lte]: todayStr } },
+        ],
+      },
+      attributes: ['clientId'],
+    });
+    configClientIds = billingConfigs.map(c => c.clientId);
+  } catch (cfgErr) {
+    logger.warn('[InvoiceCron] Could not query InvoiceBillingConfig:', cfgErr.message);
+  }
+
+  const clientWhere = {
+    deletedAt: null,
+  };
+  if (configClientIds.length > 0) {
+    clientWhere[Op.or] = [
+      { billingDate: targetDay },
+      { id: { [Op.in]: configClientIds } },
+    ];
+  } else {
+    clientWhere.billingDate = targetDay;
+  }
+
+  const clients = await db.Client.findAll({ where: clientWhere });
 
   if (clients.length === 0) {
     logger.info('[InvoiceCron] No clients due for billing today.');
@@ -214,5 +238,30 @@ function startInvoiceCron() {
   logger.info('[DailyCron] ✅ Daily cron scheduled at 00:00 IST (invoices + payroll)');
 }
 
-module.exports = { startInvoiceCron, generateClientInvoicesForDay };
+// ── Manual trigger helper ───────────────────────────────────────────────────
+async function runDailyCronNow(forcedDay = null) {
+  const { generatePayrollForDay } = require('../services/salary.service');
+  const today = new Date();
+  const todayDay = forcedDay !== null ? parseInt(forcedDay, 10) : today.getDate();
+
+  const systemUser = await db.User.findOne({
+    where: { roleLevel: 1, deletedAt: null },
+    attributes: ['id'],
+  }) || await db.User.findOne({ where: { deletedAt: null }, attributes: ['id'] });
+
+  if (!systemUser) {
+    throw new Error('No user found to attribute auto-generated records to');
+  }
+
+  const invoiceResult = await generateClientInvoicesForDay(todayDay, systemUser.id);
+  const payrollResult = await generatePayrollForDay(todayDay, systemUser.id);
+
+  return {
+    day: todayDay,
+    invoices: invoiceResult,
+    payroll: payrollResult,
+  };
+}
+
+module.exports = { startInvoiceCron, generateClientInvoicesForDay, runDailyCronNow };
 

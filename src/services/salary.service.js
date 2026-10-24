@@ -216,9 +216,47 @@ async function markPaid({ requestingUser, payrollId, data, req }) {
     category: AUDIT_CATEGORY.SALARY,
     entity: 'EmployeePayroll', entityId: payrollId,
     description: `Marked payroll #${payrollId} as PAID for ${payroll.payrollMonth}`,
-    newValues: { paymentMode: data.paymentMode, referenceNumber: data.referenceNumber },
+    newValues: { paymentMode: data.paymentMode, referenceNumber: data.referenceNumber, bankAccountId: data.bankAccountId },
     req,
   });
+
+  // If paid from a bank account, record the DEBIT transaction in bank_transactions & update account balance
+  if (data.bankAccountId) {
+    try {
+      const account = await db.BankAccount.findOne({
+        where: { id: data.bankAccountId, isActive: true, deletedAt: null }
+      });
+      if (account) {
+        const parsedAmount = parseFloat(payroll.netSalary || 0);
+        const currentBalance = parseFloat(account.currentBalance || 0);
+        const newBalance = parseFloat((currentBalance - parsedAmount).toFixed(2));
+
+        const emp = await db.User.findByPk(payroll.employeeId, {
+          attributes: ['firstName', 'lastName']
+        });
+        const empName = emp ? `${emp.firstName} ${emp.lastName}` : 'Employee';
+
+        await db.BankTransaction.create({
+          bankAccountId:   data.bankAccountId,
+          createdById:     requestingUser.id,
+          source:          'PAYROLL',
+          sourceId:        payroll.id,
+          transactionType: 'DEBIT',
+          amount:          parsedAmount,
+          runningBalance:  newBalance,
+          currency:        payroll.currency || 'INR',
+          transactionDate: new Date(),
+          paymentMode:     data.paymentMode || 'BANK_TRANSFER',
+          referenceNumber: data.referenceNumber || null,
+          purpose:         `Salary payment — ${empName} (${payroll.payrollMonth})`,
+        });
+
+        await account.update({ currentBalance: newBalance });
+      }
+    } catch (bankErr) {
+      console.error('[Salary markPaid] Failed to record in cashbook:', bankErr);
+    }
+  }
 
   return payroll;
 }
