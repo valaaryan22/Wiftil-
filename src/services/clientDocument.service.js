@@ -168,6 +168,9 @@ async function updateDocument({ requestingUser, clientId, docId, data, req }) {
 
   const full = await db.ClientDocument.findByPk(doc.id, { include: DOC_INCLUDE });
 
+  const client = await db.Client.findByPk(clientId, { attributes: ['id', 'name'] });
+  const clientName = client?.name || 'client';
+
   await writeAuditLog({
     performedBy: requestingUser,
     action: AUDIT_ACTION.CLIENT_UPDATED,
@@ -175,7 +178,7 @@ async function updateDocument({ requestingUser, clientId, docId, data, req }) {
     entity: 'ClientDocument',
     entityId: doc.id,
     entityName: doc.fileName,
-    description: `Updated document "${doc.fileName}" for client`,
+    description: `Updated document "${doc.fileName}" for client "${clientName}"`,
     oldValues,
     newValues: full.toJSON(),
     req,
@@ -197,6 +200,9 @@ async function deleteDocument({ requestingUser, clientId, docId, req }) {
 
   await doc.update({ deletedAt: new Date() });
 
+  const client = await db.Client.findByPk(clientId, { attributes: ['id', 'name'] });
+  const clientName = client?.name || 'client';
+
   await writeAuditLog({
     performedBy: requestingUser,
     action: AUDIT_ACTION.CLIENT_UPDATED,
@@ -204,7 +210,7 @@ async function deleteDocument({ requestingUser, clientId, docId, req }) {
     entity: 'ClientDocument',
     entityId: doc.id,
     entityName: doc.fileName,
-    description: `Deleted document "${doc.fileName}" from client`,
+    description: `Deleted document "${doc.fileName}" from client "${clientName}"`,
     req,
   });
 }

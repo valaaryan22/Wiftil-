@@ -94,11 +94,47 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.JSON,
       allowNull: true,
       field: 'internal_tags',
+      get() {
+        const val = this.getDataValue('internalTags');
+        if (typeof val === 'string') {
+          try {
+            return JSON.parse(val);
+          } catch (e) {
+            return val;
+          }
+        }
+        return val;
+      },
+      set(val) {
+        if (val && typeof val === 'object') {
+          this.setDataValue('internalTags', JSON.stringify(val));
+        } else {
+          this.setDataValue('internalTags', val);
+        }
+      }
     },
     socialMediaLinks: {
       type: DataTypes.JSON,
       allowNull: true,
       field: 'social_media_links',
+      get() {
+        const val = this.getDataValue('socialMediaLinks');
+        if (typeof val === 'string') {
+          try {
+            return JSON.parse(val);
+          } catch (e) {
+            return val;
+          }
+        }
+        return val;
+      },
+      set(val) {
+        if (val && typeof val === 'object') {
+          this.setDataValue('socialMediaLinks', JSON.stringify(val));
+        } else {
+          this.setDataValue('socialMediaLinks', val);
+        }
+      }
     },
     logo: {
       type: DataTypes.STRING(255),
@@ -118,6 +154,24 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true,
       field: 'brand_dna',
       defaultValue: null,
+      get() {
+        const val = this.getDataValue('brandDna');
+        if (typeof val === 'string') {
+          try {
+            return JSON.parse(val);
+          } catch (e) {
+            return val;
+          }
+        }
+        return val;
+      },
+      set(val) {
+        if (val && typeof val === 'object') {
+          this.setDataValue('brandDna', JSON.stringify(val));
+        } else {
+          this.setDataValue('brandDna', val);
+        }
+      }
     },
 
     // ── Client Overview / Scoring Fields (Admin-set) ────────────────────────

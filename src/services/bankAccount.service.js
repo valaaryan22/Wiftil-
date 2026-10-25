@@ -64,12 +64,16 @@ async function createBankAccount({ requestingUser, data, req }) {
     createdById:    requestingUser.id,
   });
 
-  await writeAuditLog(req, {
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.SYSTEM,
     action:   AUDIT_ACTION.BANK_ACCOUNT_CREATED,
-    targetModel: 'BankAccount',
-    targetId: account.id,
-    details: { accountName, accountType },
+    entity: 'BankAccount',
+    entityId: account.id,
+    entityName: accountName,
+    description: `Created bank account "${accountName}"`,
+    newValues: { accountName, accountType },
+    req,
   });
 
   return account;
@@ -114,12 +118,16 @@ async function updateBankAccount({ requestingUser, id, data, req }) {
 
   await account.update(updates);
 
-  await writeAuditLog(req, {
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.SYSTEM,
     action:   AUDIT_ACTION.BANK_ACCOUNT_UPDATED,
-    targetModel: 'BankAccount',
-    targetId: id,
-    details: updates,
+    entity: 'BankAccount',
+    entityId: id,
+    entityName: account.accountName,
+    description: `Updated bank account "${account.accountName}"`,
+    newValues: updates,
+    req,
   });
 
   return account.reload();
@@ -137,12 +145,16 @@ async function deleteBankAccount({ requestingUser, id, req }) {
 
   await account.destroy();
 
-  await writeAuditLog(req, {
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.SYSTEM,
     action:   AUDIT_ACTION.BANK_ACCOUNT_DELETED,
-    targetModel: 'BankAccount',
-    targetId: id,
-    details: { accountName: account.accountName },
+    entity: 'BankAccount',
+    entityId: id,
+    entityName: account.accountName,
+    description: `Deleted bank account "${account.accountName}"`,
+    newValues: { accountName: account.accountName },
+    req,
   });
 }
 
@@ -372,12 +384,16 @@ async function addTransaction({ requestingUser, bankAccountId, data, req }) {
   // Update account balance
   await account.update({ currentBalance: newBalance });
 
-  await writeAuditLog(req, {
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.SYSTEM,
     action:   AUDIT_ACTION.BANK_TRANSACTION_ADDED,
-    targetModel: 'BankTransaction',
-    targetId: tx.id,
-    details: { transactionType, amount: parsedAmount, bankAccountId },
+    entity: 'BankTransaction',
+    entityId: tx.id,
+    entityName: account.accountName,
+    description: `Added ${transactionType} transaction of ₹${parsedAmount} to bank account "${account.accountName}"`,
+    newValues: { transactionType, amount: parsedAmount, bankAccountId },
+    req,
   });
 
   return tx;

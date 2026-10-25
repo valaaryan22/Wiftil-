@@ -122,6 +122,7 @@ async function createPackage({ requestingUser, clientId, data, req }) {
   });
 
   const fullPkg = await db.ClientPackage.findByPk(pkg.id, { include: getPackageInclude() });
+  const clientName = fullPkg?.client?.name || clientId;
 
   await writeAuditLog({
     performedBy: requestingUser,
@@ -130,7 +131,7 @@ async function createPackage({ requestingUser, clientId, data, req }) {
     entity: 'ClientPackage',
     entityId: pkg.id,
     entityName: pkg.name,
-    description: `Created package: ${pkg.name} for client ${clientId}`,
+    description: `Created package: ${pkg.name} for client "${clientName}"`,
     newValues: pkg.toJSON(),
     req,
   });
@@ -277,14 +278,21 @@ async function updatePackageService({ requestingUser, packageServiceId, data, re
   // Recalculate package basePrice from all included services
   await _recalcPackageBasePrice(ps.packageId);
 
+  const [svc, pkg] = await Promise.all([
+    db.ServiceCatalog.findByPk(ps.serviceId, { attributes: ['id', 'name'] }),
+    db.ClientPackage.findByPk(ps.packageId, { attributes: ['id', 'name'] }),
+  ]);
+  const serviceName = svc?.name || 'Service';
+  const pkgName = pkg?.name || 'Package';
+
   await writeAuditLog({
     performedBy: requestingUser,
     action: AUDIT_ACTION.PACKAGE_SERVICE_UPDATED,
     category: AUDIT_CATEGORY.PACKAGE,
     entity: 'PackageService',
     entityId: ps.id,
-    entityName: `PackageService:${ps.id}`,
-    description: `Updated package service`,
+    entityName: `${pkgName} → ${serviceName}`,
+    description: `Updated package service "${serviceName}" in package "${pkgName}"`,
     newValues: ps.toJSON(),
     req,
   });
@@ -303,6 +311,13 @@ async function removeServiceFromPackage({ requestingUser, packageServiceId, req 
   }
 
   const { packageId } = ps;
+  const [svc, pkg] = await Promise.all([
+    db.ServiceCatalog.findByPk(ps.serviceId, { attributes: ['id', 'name'] }),
+    db.ClientPackage.findByPk(packageId, { attributes: ['id', 'name'] }),
+  ]);
+  const serviceName = svc?.name || 'Service';
+  const pkgName = pkg?.name || 'Package';
+
   await ps.destroy();
 
   // Recalculate package basePrice after removal
@@ -314,8 +329,8 @@ async function removeServiceFromPackage({ requestingUser, packageServiceId, req 
     category: AUDIT_CATEGORY.PACKAGE,
     entity: 'PackageService',
     entityId: packageServiceId,
-    entityName: `PackageService:${packageServiceId}`,
-    description: `Removed service from package`,
+    entityName: `${pkgName} → ${serviceName}`,
+    description: `Removed service "${serviceName}" from package "${pkgName}"`,
     req,
   });
 }
@@ -350,14 +365,20 @@ async function requestAddOn({ requestingUser, packageId, data, req }) {
     notes,
   });
 
+  let addOnLabel = customDescription || 'Add-on';
+  if (serviceId) {
+    const svc = await db.ServiceCatalog.findByPk(serviceId, { attributes: ['id', 'name'] });
+    if (svc?.name) addOnLabel = svc.name;
+  }
+
   await writeAuditLog({
     performedBy: requestingUser,
     action: AUDIT_ACTION.ADDON_REQUESTED,
     category: AUDIT_CATEGORY.ADDON,
     entity: 'PackageAddOn',
     entityId: addOn.id,
-    entityName: `AddOn for Package ${pkg.name}`,
-    description: `Add-on requested on package: ${pkg.name}`,
+    entityName: `${pkg.name} → ${addOnLabel}`,
+    description: `Add-on "${addOnLabel}" requested on package "${pkg.name}"`,
     newValues: addOn.toJSON(),
     req,
   });
@@ -393,14 +414,22 @@ async function approveAddOn({ requestingUser, addOnId, approve, rejectionReason,
 
   await addOn.save();
 
+  const pkg = await db.ClientPackage.findByPk(addOn.packageId, { attributes: ['id', 'name'] });
+  let addOnLabel = addOn.customDescription || 'Add-on';
+  if (addOn.serviceId) {
+    const svc = await db.ServiceCatalog.findByPk(addOn.serviceId, { attributes: ['id', 'name'] });
+    if (svc?.name) addOnLabel = svc.name;
+  }
+  const pkgName = pkg?.name || 'Package';
+
   await writeAuditLog({
     performedBy: requestingUser,
     action: approve ? AUDIT_ACTION.ADDON_APPROVED : AUDIT_ACTION.ADDON_REJECTED,
     category: AUDIT_CATEGORY.ADDON,
     entity: 'PackageAddOn',
     entityId: addOn.id,
-    entityName: `AddOn:${addOn.id}`,
-    description: `Add-on ${approve ? 'approved' : 'rejected'}`,
+    entityName: `${pkgName} → ${addOnLabel}`,
+    description: `Add-on "${addOnLabel}" ${approve ? 'approved' : 'rejected'} for package "${pkgName}"`,
     newValues: addOn.toJSON(),
     req,
   });
@@ -430,14 +459,22 @@ async function updateAddOnStatus({ requestingUser, addOnId, status, req }) {
   if (status === 'BILLED') addOn.billedAt = new Date();
   await addOn.save();
 
+  const pkg = await db.ClientPackage.findByPk(addOn.packageId, { attributes: ['id', 'name'] });
+  let addOnLabel = addOn.customDescription || 'Add-on';
+  if (addOn.serviceId) {
+    const svc = await db.ServiceCatalog.findByPk(addOn.serviceId, { attributes: ['id', 'name'] });
+    if (svc?.name) addOnLabel = svc.name;
+  }
+  const pkgName = pkg?.name || 'Package';
+
   await writeAuditLog({
     performedBy: requestingUser,
     action: status === 'DELIVERED' ? AUDIT_ACTION.ADDON_DELIVERED : AUDIT_ACTION.ADDON_BILLED,
     category: AUDIT_CATEGORY.ADDON,
     entity: 'PackageAddOn',
     entityId: addOn.id,
-    entityName: `AddOn:${addOn.id}`,
-    description: `Add-on marked as ${status}`,
+    entityName: `${pkgName} → ${addOnLabel}`,
+    description: `Add-on "${addOnLabel}" marked as ${status} for package "${pkgName}"`,
     newValues: addOn.toJSON(),
     req,
   });

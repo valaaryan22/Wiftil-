@@ -154,6 +154,17 @@ async function getDashboardSummary(userId) {
     db.DateChangeRequest.count({ where: { ...reqWhere, status: 'PENDING' } }),
   ]);
 
+  // ── Reminders ──────────────────────────────────────────────────────────
+  const now = new Date();
+  const reminderWhere = user?.role?.accessLevel === 1
+    ? { status: 'PENDING' }
+    : { [Op.or]: [{ creatorId: userId }, { bossId: userId }], status: 'PENDING' };
+
+  const [remindersTotal, remindersOverdue] = await Promise.all([
+    db.Reminder.count({ where: reminderWhere }),
+    db.Reminder.count({ where: { ...reminderWhere, remindAt: { [Op.lt]: now } } }),
+  ]);
+
   // ── Notifications ─────────────────────────────────────────────────────
   const unreadNotifications = await db.Notification.count({
     where: { userId, isRead: false },
@@ -204,6 +215,10 @@ async function getDashboardSummary(userId) {
       total: reqTotal,
       pending: reqPending,
     },
+    reminders: {
+      total: remindersTotal,
+      overdue: remindersOverdue,
+    },
     notifications: {
       unread: unreadNotifications,
     },
@@ -250,8 +265,10 @@ async function getDashboardTasks(userId, { page, limit, status, priority, search
   }
 
   const where = { [Op.or]: orConditions, deletedAt: null };
-  if (status) {
+  if (status && status !== 'ALL') {
     where.status = status;
+  } else if (status === 'ALL') {
+    // Show all tasks including completed
   } else {
     // Hide completed tasks from dashboard view
     where.status = { [Op.ne]: 'COMPLETED' };
@@ -313,8 +330,10 @@ async function getDashboardSubTasks(userId, { page, limit, status, priority, sea
   );
 
   const where = { id: { [Op.in]: subTaskIds } };
-  if (status) {
+  if (status && status !== 'ALL') {
     where.status = status;
+  } else if (status === 'ALL') {
+    // Show all subtasks including final-approved
   } else {
     // Hide completed/final-approved subtasks from dashboard view
     where.status = { [Op.ne]: 'FINAL_APPROVED' };

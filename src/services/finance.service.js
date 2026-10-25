@@ -394,12 +394,18 @@ async function upsertBillingConfig({ requestingUser, clientId, data, req }) {
     });
   }
 
-  await writeAuditLog(req, {
+  const clientName = client?.name || 'Client';
+
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.SYSTEM,
     action:   created ? AUDIT_ACTION.BILLING_CONFIG_CREATED : AUDIT_ACTION.BILLING_CONFIG_UPDATED,
-    targetModel: 'InvoiceBillingConfig',
-    targetId: config.id,
-    details: { clientId, billingDay, billingFrequency },
+    entity: 'InvoiceBillingConfig',
+    entityId: config.id,
+    entityName: `Billing Config — ${clientName}`,
+    description: `${created ? 'Created' : 'Updated'} billing config for client "${clientName}" (${billingFrequency}, day ${billingDay})`,
+    newValues: { clientId, billingDay, billingFrequency },
+    req,
   });
 
   return config.reload({ include: [
@@ -489,12 +495,18 @@ async function createInvoice({ requestingUser, data, req }) {
     );
   }
 
-  await writeAuditLog(req, {
+  const clientName = client?.name || 'Client';
+
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.PAYMENT,
     action:   AUDIT_ACTION.INVOICE_CREATED || 'INVOICE_CREATED',
-    targetModel: 'ClientPayment',
-    targetId: invoice.id,
-    details: { clientId, amount: baseAmount + computedTax },
+    entity: 'ClientPayment',
+    entityId: invoice.id,
+    entityName: invoice.invoiceNumber,
+    description: `Created invoice "${invoice.invoiceNumber}" for client "${clientName}" — ₹${baseAmount + computedTax}`,
+    newValues: { clientId, invoiceNumber: invoice.invoiceNumber, amount: baseAmount + computedTax },
+    req,
   });
 
   return invoice;
@@ -562,12 +574,19 @@ async function collectPayment({ requestingUser, invoiceId, data, req }) {
     approvedAt:    newPaymentStatus === 'PAID' ? new Date() : invoice.approvedAt,
   });
 
-  await writeAuditLog(req, {
+  const client = await db.Client.findByPk(invoice.clientId, { attributes: ['id', 'name'] });
+  const clientName = client?.name || 'Client';
+
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.PAYMENT,
     action:   AUDIT_ACTION.PAYMENT_COLLECTED || 'PAYMENT_COLLECTED',
-    targetModel: 'ClientPayment',
-    targetId: payment.id,
-    details: { invoiceId, amount: collectAmount, newPaymentStatus, bankAccountId },
+    entity: 'ClientPayment',
+    entityId: payment.id,
+    entityName: invoice.invoiceNumber,
+    description: `Collected payment of ₹${collectAmount} on invoice "${invoice.invoiceNumber}" for client "${clientName}"`,
+    newValues: { invoiceId, invoiceNumber: invoice.invoiceNumber, amount: collectAmount, newPaymentStatus, bankAccountId },
+    req,
   });
 
   // If a bank account was selected, record the CREDIT transaction in bank_transactions & update account balance
@@ -706,12 +725,15 @@ async function generateDueInvoices({ requestingUser, req }) {
       nextDueAt: nextDue.toISOString().slice(0, 10),
     });
 
-    await writeAuditLog(req, {
+    await writeAuditLog({
       category: AUDIT_CATEGORY.PAYMENT,
       action:   AUDIT_ACTION.INVOICE_AUTO_GENERATED,
-      targetModel: 'ClientPayment',
-      targetId: invoice.id,
-      details: { clientId: config.clientId, billingMonth, amount: baseAmount + taxAmount },
+      entity: 'ClientPayment',
+      entityId: invoice.id,
+      entityName: invoice.invoiceNumber,
+      description: `Auto-generated monthly invoice "${invoice.invoiceNumber}" for client "${config.client.name}" (${billingMonth}) — ₹${baseAmount + taxAmount}`,
+      newValues: { clientId: config.clientId, billingMonth, amount: baseAmount + taxAmount },
+      req,
     });
 
     generated.push({ invoice, clientName: config.client.name });

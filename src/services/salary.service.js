@@ -163,7 +163,10 @@ async function approvePayroll({ requestingUser, payrollId, req }) {
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
-  const payroll = await db.EmployeePayroll.findOne({ where: { id: payrollId, deletedAt: null } });
+  const payroll = await db.EmployeePayroll.findOne({
+    where: { id: payrollId, deletedAt: null },
+    include: [{ model: db.User, as: 'employee', attributes: USER_ATTRS }],
+  });
   if (!payroll) {
     const err = new Error('Payroll not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
@@ -174,12 +177,17 @@ async function approvePayroll({ requestingUser, payrollId, req }) {
 
   await payroll.update({ status: 'APPROVED' });
 
+  const employeeName = payroll.employee ? `${payroll.employee.firstName} ${payroll.employee.lastName}`.trim() : 'Employee';
+
   await writeAuditLog({
     performedBy: requestingUser,
     action: AUDIT_ACTION.PAYROLL_APPROVED,
     category: AUDIT_CATEGORY.SALARY,
     entity: 'EmployeePayroll', entityId: payrollId,
-    description: `Approved payroll #${payrollId} for month ${payroll.payrollMonth}`,
+    entityName: employeeName,
+    targetUserId: payroll.employeeId,
+    targetUserName: employeeName,
+    description: `Approved payroll for ${employeeName} for month ${payroll.payrollMonth}`,
     req,
   });
 
@@ -192,7 +200,10 @@ async function markPaid({ requestingUser, payrollId, data, req }) {
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
-  const payroll = await db.EmployeePayroll.findOne({ where: { id: payrollId, deletedAt: null } });
+  const payroll = await db.EmployeePayroll.findOne({
+    where: { id: payrollId, deletedAt: null },
+    include: [{ model: db.User, as: 'employee', attributes: USER_ATTRS }],
+  });
   if (!payroll) {
     const err = new Error('Payroll not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
@@ -210,12 +221,17 @@ async function markPaid({ requestingUser, payrollId, data, req }) {
     notes: data.notes || payroll.notes,
   });
 
+  const employeeName = payroll.employee ? `${payroll.employee.firstName} ${payroll.employee.lastName}`.trim() : 'Employee';
+
   await writeAuditLog({
     performedBy: requestingUser,
     action: AUDIT_ACTION.PAYROLL_PAID,
     category: AUDIT_CATEGORY.SALARY,
     entity: 'EmployeePayroll', entityId: payrollId,
-    description: `Marked payroll #${payrollId} as PAID for ${payroll.payrollMonth}`,
+    entityName: employeeName,
+    targetUserId: payroll.employeeId,
+    targetUserName: employeeName,
+    description: `Marked payroll for ${employeeName} as PAID for ${payroll.payrollMonth}`,
     newValues: { paymentMode: data.paymentMode, referenceNumber: data.referenceNumber, bankAccountId: data.bankAccountId },
     req,
   });
@@ -231,10 +247,7 @@ async function markPaid({ requestingUser, payrollId, data, req }) {
         const currentBalance = parseFloat(account.currentBalance || 0);
         const newBalance = parseFloat((currentBalance - parsedAmount).toFixed(2));
 
-        const emp = await db.User.findByPk(payroll.employeeId, {
-          attributes: ['firstName', 'lastName']
-        });
-        const empName = emp ? `${emp.firstName} ${emp.lastName}` : 'Employee';
+        const empName = employeeName;
 
         await db.BankTransaction.create({
           bankAccountId:   data.bankAccountId,
@@ -267,7 +280,10 @@ async function addIncentive({ requestingUser, payrollId, data, req }) {
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
-  const payroll = await db.EmployeePayroll.findOne({ where: { id: payrollId, deletedAt: null } });
+  const payroll = await db.EmployeePayroll.findOne({
+    where: { id: payrollId, deletedAt: null },
+    include: [{ model: db.User, as: 'employee', attributes: USER_ATTRS }],
+  });
   if (!payroll) {
     const err = new Error('Payroll not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
@@ -298,12 +314,17 @@ async function addIncentive({ requestingUser, payrollId, data, req }) {
     notes: notes || payroll.notes,
   });
 
+  const employeeName = payroll.employee ? `${payroll.employee.firstName} ${payroll.employee.lastName}`.trim() : 'Employee';
+
   await writeAuditLog({
     performedBy: requestingUser,
     action: AUDIT_ACTION.PAYROLL_INCENTIVE_ADDED,
     category: AUDIT_CATEGORY.SALARY,
     entity: 'EmployeePayroll', entityId: payrollId,
-    description: `Added ${type} of ₹${amount} to payroll #${payrollId}`,
+    entityName: employeeName,
+    targetUserId: payroll.employeeId,
+    targetUserName: employeeName,
+    description: `Added ${type} of ₹${amount} to payroll for ${employeeName} (${payroll.payrollMonth})`,
     newValues: { type, amount, newNet },
     req,
   });
@@ -317,7 +338,10 @@ async function cancelPayroll({ requestingUser, payrollId, req }) {
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
-  const payroll = await db.EmployeePayroll.findOne({ where: { id: payrollId, deletedAt: null } });
+  const payroll = await db.EmployeePayroll.findOne({
+    where: { id: payrollId, deletedAt: null },
+    include: [{ model: db.User, as: 'employee', attributes: USER_ATTRS }],
+  });
   if (!payroll) {
     const err = new Error('Payroll not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
@@ -328,12 +352,17 @@ async function cancelPayroll({ requestingUser, payrollId, req }) {
 
   await payroll.update({ status: 'CANCELLED' });
 
+  const employeeName = payroll.employee ? `${payroll.employee.firstName} ${payroll.employee.lastName}`.trim() : 'Employee';
+
   await writeAuditLog({
     performedBy: requestingUser,
     action: AUDIT_ACTION.PAYROLL_CANCELLED,
     category: AUDIT_CATEGORY.SALARY,
     entity: 'EmployeePayroll', entityId: payrollId,
-    description: `Cancelled payroll #${payrollId} for month ${payroll.payrollMonth}`,
+    entityName: employeeName,
+    targetUserId: payroll.employeeId,
+    targetUserName: employeeName,
+    description: `Cancelled payroll for ${employeeName} for month ${payroll.payrollMonth}`,
     req,
   });
 
@@ -449,6 +478,8 @@ async function createPayrollManually({ requestingUser, data, req }) {
     category: AUDIT_CATEGORY.SALARY,
     entity: 'EmployeePayroll', entityId: payroll.id,
     entityName: `${employee.firstName} ${employee.lastName}`,
+    targetUserId: employee.id,
+    targetUserName: `${employee.firstName} ${employee.lastName}`,
     description: `Manually created DRAFT payroll for ${employee.firstName} ${employee.lastName} — month: ${month}, net: ₹${net}`,
     newValues: { baseSalary: resolvedBaseSalary, incentiveAmount: inc, deductionAmount: ded, net, month, autoAttendance },
     req,

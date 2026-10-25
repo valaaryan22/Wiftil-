@@ -92,6 +92,7 @@ async function createDocket({ requestingUser, clientId, data, req }) {
   }
 
   const full = await db.Docket.findByPk(docket.id, { include: DOCKET_INCLUDE });
+  const clientName = full?.client?.name || clientId;
 
   await writeAuditLog({
     performedBy: requestingUser,
@@ -100,7 +101,7 @@ async function createDocket({ requestingUser, clientId, data, req }) {
     entity: 'Docket',
     entityId: docket.id,
     entityName: docket.title,
-    description: `Created docket: ${docket.title} for client ${clientId} (DRAFT)`,
+    description: `Created docket "${docket.title}" for client "${clientName}" (DRAFT)`,
     newValues: docket.toJSON(),
     req,
   });
@@ -407,14 +408,18 @@ async function addDocketManager({ requestingUser, docketId, data, req }) {
     ],
   });
 
+  const managerName = full?.manager ? `${full.manager.firstName} ${full.manager.lastName}`.trim() : managerId;
+
   await writeAuditLog({
     performedBy: requestingUser,
     action: AUDIT_ACTION.DOCKET_MANAGER_ADDED,
     category: AUDIT_CATEGORY.DOCKET,
     entity: 'DocketManager',
     entityId: assignment.id,
-    entityName: `${docket.title} → Manager`,
-    description: `Added manager ${managerId} to docket: ${docket.title} with role ${role || 'PRIMARY'}`,
+    entityName: `${docket.title} → ${managerName}`,
+    targetUserId: managerId,
+    targetUserName: managerName,
+    description: `Added manager "${managerName}" to docket "${docket.title}" with role ${role || 'PRIMARY'}`,
     newValues: assignment.toJSON(),
     req,
   });
@@ -430,8 +435,11 @@ async function removeDocketManager({ requestingUser, docketId, managerId, req })
 
   const assignment = await db.DocketManager.findOne({
     where: { docketId, managerId },
+    include: [{ model: db.User, as: 'manager', attributes: ['id', 'firstName', 'lastName'] }],
   });
   if (!assignment) notFound('Manager assignment');
+
+  const managerName = assignment.manager ? `${assignment.manager.firstName} ${assignment.manager.lastName}`.trim() : managerId;
 
   await assignment.destroy();
 
@@ -441,8 +449,10 @@ async function removeDocketManager({ requestingUser, docketId, managerId, req })
     category: AUDIT_CATEGORY.DOCKET,
     entity: 'DocketManager',
     entityId: assignment.id,
-    entityName: `${docket.title} → Manager`,
-    description: `Removed manager ${managerId} from docket: ${docket.title}`,
+    entityName: `${docket.title} → ${managerName}`,
+    targetUserId: managerId,
+    targetUserName: managerName,
+    description: `Removed manager "${managerName}" from docket "${docket.title}"`,
     req,
   });
 }

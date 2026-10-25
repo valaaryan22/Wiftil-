@@ -186,12 +186,16 @@ async function createExpense({ requestingUser, data, req }) {
     }
   }
 
-  await writeAuditLog(req, {
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.SYSTEM,
     action:   AUDIT_ACTION.EXPENSE_CREATED,
-    targetModel: 'Expense',
-    targetId: expense.id,
-    details: { title, amount: expense.amount, totalAmount: expense.totalAmount },
+    entity: 'Expense',
+    entityId: expense.id,
+    entityName: expense.title || expense.expenseNumber,
+    description: `Created expense "${expense.title || expense.expenseNumber}" — ₹${expense.totalAmount}`,
+    newValues: { title, amount: expense.amount, totalAmount: expense.totalAmount },
+    req,
   });
 
   return expense.reload({ include: EXPENSE_INCLUDE });
@@ -230,12 +234,16 @@ async function updateExpense({ requestingUser, id, data, req }) {
 
   await expense.update(updates);
 
-  await writeAuditLog(req, {
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.SYSTEM,
     action:   AUDIT_ACTION.EXPENSE_UPDATED,
-    targetModel: 'Expense',
-    targetId: id,
-    details: updates,
+    entity: 'Expense',
+    entityId: id,
+    entityName: expense.title || expense.expenseNumber,
+    description: `Updated expense "${expense.title || expense.expenseNumber}"`,
+    newValues: updates,
+    req,
   });
 
   return expense.reload({ include: EXPENSE_INCLUDE });
@@ -254,12 +262,16 @@ async function submitExpense({ requestingUser, id, req }) {
 
   await expense.update({ status: 'SUBMITTED' });
 
-  await writeAuditLog(req, {
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.SYSTEM,
     action:   AUDIT_ACTION.EXPENSE_SUBMITTED,
-    targetModel: 'Expense',
-    targetId: id,
-    details: { expenseNumber: expense.expenseNumber },
+    entity: 'Expense',
+    entityId: id,
+    entityName: expense.title || expense.expenseNumber,
+    description: `Submitted expense "${expense.title || expense.expenseNumber}" for review`,
+    newValues: { expenseNumber: expense.expenseNumber },
+    req,
   });
 
   return expense.reload({ include: EXPENSE_INCLUDE });
@@ -284,12 +296,16 @@ async function approveExpense({ requestingUser, id, req }) {
     await bankSvc.recordExpenseInCashbook({ expense, requestingUser, req });
   }
 
-  await writeAuditLog(req, {
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.SYSTEM,
     action:   AUDIT_ACTION.EXPENSE_APPROVED,
-    targetModel: 'Expense',
-    targetId: id,
-    details: { expenseNumber: expense.expenseNumber, totalAmount: expense.totalAmount },
+    entity: 'Expense',
+    entityId: id,
+    entityName: expense.title || expense.expenseNumber,
+    description: `Approved expense "${expense.title || expense.expenseNumber}" — ₹${expense.totalAmount}`,
+    newValues: { expenseNumber: expense.expenseNumber, totalAmount: expense.totalAmount },
+    req,
   });
 
   return expense.reload({ include: EXPENSE_INCLUDE });
@@ -308,12 +324,16 @@ async function rejectExpense({ requestingUser, id, data, req }) {
     rejectionReason: data?.rejectionReason || null,
   });
 
-  await writeAuditLog(req, {
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.SYSTEM,
     action:   AUDIT_ACTION.EXPENSE_REJECTED,
-    targetModel: 'Expense',
-    targetId: id,
-    details: { expenseNumber: expense.expenseNumber, rejectionReason: data?.rejectionReason },
+    entity: 'Expense',
+    entityId: id,
+    entityName: expense.title || expense.expenseNumber,
+    description: `Rejected expense "${expense.title || expense.expenseNumber}"${data?.rejectionReason ? `: "${data.rejectionReason}"` : ''}`,
+    newValues: { expenseNumber: expense.expenseNumber, rejectionReason: data?.rejectionReason },
+    req,
   });
 
   return expense.reload({ include: EXPENSE_INCLUDE });
@@ -332,12 +352,16 @@ async function deleteExpense({ requestingUser, id, req }) {
 
   await expense.destroy();
 
-  await writeAuditLog(req, {
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.SYSTEM,
     action:   AUDIT_ACTION.EXPENSE_DELETED,
-    targetModel: 'Expense',
-    targetId: id,
-    details: { expenseNumber: expense.expenseNumber },
+    entity: 'Expense',
+    entityId: id,
+    entityName: expense.title || expense.expenseNumber,
+    description: `Deleted expense "${expense.title || expense.expenseNumber}"`,
+    newValues: { expenseNumber: expense.expenseNumber },
+    req,
   });
 }
 

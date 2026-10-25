@@ -459,7 +459,7 @@ async function issueCreditNote({ requestingUser, clientId, data, req }) {
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_CREDIT_NOTE,
     category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
-    entityId: record.id, entityName: record.id,
+    entityId: record.id, entityName: `Credit Note — ${client.name}`,
     description: `Credit note of ₹${amount} issued for client "${client.name}"`,
     newValues: record.toJSON(), req,
   });
@@ -555,11 +555,12 @@ async function updatePayment({ requestingUser, clientId, paymentId, data, req })
   await record.save();
   const full = await db.ClientPayment.findByPk(record.id, { include: INVOICE_INCLUDE });
 
+  const displayName = full.invoiceNumber || full.referenceNumber || (full.paymentType ? `${full.paymentType} payment` : 'Payment record');
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_UPDATED,
     category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
-    entityId: record.id, entityName: record.invoiceNumber || record.id,
-    description: `Payment record updated`,
+    entityId: record.id, entityName: displayName,
+    description: `Payment record "${displayName}" updated`,
     oldValues, newValues: full.toJSON(), req,
   });
 
@@ -584,11 +585,12 @@ async function deletePayment({ requestingUser, clientId, paymentId, req }) {
 
   await record.update({ deletedAt: new Date() });
 
+  const displayName = record.invoiceNumber || record.referenceNumber || (record.paymentType ? `${record.paymentType} payment` : 'Payment record');
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.PAYMENT_DELETED,
     category: AUDIT_CATEGORY.PAYMENT, entity: 'ClientPayment',
-    entityId: record.id, entityName: record.invoiceNumber || record.id,
-    description: `Payment record "${record.invoiceNumber || record.id}" deleted`,
+    entityId: record.id, entityName: displayName,
+    description: `Payment record "${displayName}" deleted`,
     req,
   });
 }
@@ -863,12 +865,16 @@ async function submitInvoiceForReview({ requestingUser, clientId, paymentId, req
 
   await inv.update({ invoiceStatus: 'UNDER_REVIEW' });
 
-  await writeAuditLog(req, {
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.PAYMENT,
     action:   AUDIT_ACTION.PAYMENT_INVOICE_REVIEWED,
-    targetModel: 'ClientPayment',
-    targetId: paymentId,
-    details: { invoiceNumber: inv.invoiceNumber, submittedBy: requestingUser.id },
+    entity: 'ClientPayment',
+    entityId: paymentId,
+    entityName: inv.invoiceNumber,
+    description: `Invoice "${inv.invoiceNumber}" submitted for review by ${requestingUser.firstName} ${requestingUser.lastName}`,
+    newValues: { invoiceNumber: inv.invoiceNumber, submittedBy: requestingUser.id },
+    req,
   });
 
   return inv.reload({ include: INVOICE_INCLUDE });
@@ -892,12 +898,16 @@ async function approveInvoice({ requestingUser, clientId, paymentId, req }) {
     invoiceApprovedAt:  new Date(),
   });
 
-  await writeAuditLog(req, {
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.PAYMENT,
     action:   AUDIT_ACTION.PAYMENT_INVOICE_APPROVED,
-    targetModel: 'ClientPayment',
-    targetId: paymentId,
-    details: { invoiceNumber: inv.invoiceNumber, approvedBy: requestingUser.id },
+    entity: 'ClientPayment',
+    entityId: paymentId,
+    entityName: inv.invoiceNumber,
+    description: `Invoice "${inv.invoiceNumber}" approved by ${requestingUser.firstName} ${requestingUser.lastName}`,
+    newValues: { invoiceNumber: inv.invoiceNumber, approvedBy: requestingUser.id },
+    req,
   });
 
   return inv.reload({ include: INVOICE_INCLUDE });
@@ -918,12 +928,16 @@ async function rejectInvoice({ requestingUser, clientId, paymentId, data, req })
     rejectionReason: data?.rejectionReason || null,
   });
 
-  await writeAuditLog(req, {
+  await writeAuditLog({
+    performedBy: requestingUser,
     category: AUDIT_CATEGORY.PAYMENT,
     action:   AUDIT_ACTION.PAYMENT_INVOICE_REJECTED,
-    targetModel: 'ClientPayment',
-    targetId: paymentId,
-    details: { invoiceNumber: inv.invoiceNumber, rejectionReason: data?.rejectionReason },
+    entity: 'ClientPayment',
+    entityId: paymentId,
+    entityName: inv.invoiceNumber,
+    description: `Invoice "${inv.invoiceNumber}" rejected${data?.rejectionReason ? `: "${data.rejectionReason}"` : ''}`,
+    newValues: { invoiceNumber: inv.invoiceNumber, rejectionReason: data?.rejectionReason },
+    req,
   });
 
   return inv.reload({ include: INVOICE_INCLUDE });

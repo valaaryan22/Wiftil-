@@ -71,6 +71,17 @@ const modelFiles = [
   require('./EmployeePayroll.js')(sequelize, Sequelize.DataTypes),
   // HRM — Attendance module
   require('./Attendance.js')(sequelize, Sequelize.DataTypes),
+  // Vendor & Collaborator Management module
+  require('./Vendor.js')(sequelize, Sequelize.DataTypes),
+  require('./VendorRateCard.js')(sequelize, Sequelize.DataTypes),
+  require('./VendorPerformance.js')(sequelize, Sequelize.DataTypes),
+  // Module X: CRM (Pre-Sales Relationship Management)
+  require('./Lead.js')(sequelize, Sequelize.DataTypes),
+  require('./Deal.js')(sequelize, Sequelize.DataTypes),
+  require('./CrmActivity.js')(sequelize, Sequelize.DataTypes),
+  require('./DealContract.js')(sequelize, Sequelize.DataTypes),
+  // Reminders module (Workbench & Calendar)
+  require('./Reminder.js')(sequelize, Sequelize.DataTypes),
 ];
 
 modelFiles.forEach(model => {

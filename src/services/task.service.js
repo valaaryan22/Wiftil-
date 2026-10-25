@@ -119,11 +119,15 @@ async function createTask({ requestingUser, title, description, priority, startD
   });
 
   const created = await getFullTask(task.id);
+  const docketName = created?.docket?.title || null;
+  const managerName = created?.manager ? `${created.manager.firstName} ${created.manager.lastName}`.trim() : null;
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.TASK_CREATED, category: AUDIT_CATEGORY.TASK,
     entity: 'Task', entityId: task.id, entityName: task.title,
-    description: `Admin created task "${task.title}"${docketId ? ` under docket ${docketId}` : ''}${managerId ? ` and assigned to manager` : ''}`,
+    targetUserId: managerId || null,
+    targetUserName: managerName || null,
+    description: `Admin created task "${task.title}"${docketName ? ` under docket "${docketName}"` : ''}${managerName ? ` and assigned to manager "${managerName}"` : ''}`,
     newValues: { title, priority, dueDate, managerId, docketId }, req,
   });
 

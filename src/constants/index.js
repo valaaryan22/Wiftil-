@@ -60,6 +60,12 @@ const BILLING_CONFIG_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can configure cli
 const SALARY_MANAGE_MAX_LEVEL   = 2; // Level ≤ 2 (ADMIN+) can set employee salaries
 const PAYROLL_VIEW_MAX_LEVEL    = 3; // Level ≤ 3 (MANAGER+) can view & approve payroll
 
+// Vendor & Workforce Hub permissions
+const VENDOR_MANAGE_MAX_LEVEL   = 3; // Level ≤ 3 (MANAGER+) can manage vendors & external workforce
+
+// CRM & Pre-Sales Relationship Management permissions
+const CRM_MANAGE_MAX_LEVEL      = 3; // Level ≤ 3 (MANAGER+) can manage CRM leads, deals, follow-ups, contracts
+
 // ─── Legacy aliases (kept so old call-sites compile without mass-rename) ─────────
 // These point to the same constants under the old names.
 const LEAVE_APPROVAL_MIN_LEVEL  = LEAVE_APPROVAL_MAX_LEVEL;
@@ -180,6 +186,8 @@ const AUDIT_CATEGORY = Object.freeze({
   PAYMENT: 'PAYMENT',
   SALARY:  'SALARY',
   ATTENDANCE: 'ATTENDANCE',
+  VENDOR:  'VENDOR',
+  CRM:     'CRM',
 });
 
 const AUDIT_ACTION = Object.freeze({
@@ -336,6 +344,31 @@ const AUDIT_ACTION = Object.freeze({
   ATTENDANCE_PUNCH_IN:        'ATTENDANCE_PUNCH_IN',
   ATTENDANCE_PUNCH_OUT:       'ATTENDANCE_PUNCH_OUT',
   ATTENDANCE_OVERRIDE:        'ATTENDANCE_OVERRIDE',
+  // Vendor & Workforce Hub
+  VENDOR_CREATED:             'VENDOR_CREATED',
+  VENDOR_UPDATED:             'VENDOR_UPDATED',
+  VENDOR_DELETED:             'VENDOR_DELETED',
+  VENDOR_RATE_CARD_CREATED:   'VENDOR_RATE_CARD_CREATED',
+  VENDOR_RATE_CARD_UPDATED:   'VENDOR_RATE_CARD_UPDATED',
+  VENDOR_RATE_CARD_DELETED:   'VENDOR_RATE_CARD_DELETED',
+  VENDOR_PERFORMANCE_RECORDED:'VENDOR_PERFORMANCE_RECORDED',
+  VENDOR_PERFORMANCE_DELETED: 'VENDOR_PERFORMANCE_DELETED',
+  // CRM & Pre-Sales
+  CRM_LEAD_CREATED:           'CRM_LEAD_CREATED',
+  CRM_LEAD_UPDATED:           'CRM_LEAD_UPDATED',
+  CRM_LEAD_DELETED:           'CRM_LEAD_DELETED',
+  CRM_LEAD_CONVERTED:         'CRM_LEAD_CONVERTED',
+  CRM_DEAL_CREATED:           'CRM_DEAL_CREATED',
+  CRM_DEAL_UPDATED:           'CRM_DEAL_UPDATED',
+  CRM_DEAL_DELETED:           'CRM_DEAL_DELETED',
+  CRM_DEAL_STAGE_CHANGED:     'CRM_DEAL_STAGE_CHANGED',
+  CRM_ACTIVITY_CREATED:       'CRM_ACTIVITY_CREATED',
+  CRM_ACTIVITY_UPDATED:       'CRM_ACTIVITY_UPDATED',
+  CRM_ACTIVITY_COMPLETED:     'CRM_ACTIVITY_COMPLETED',
+  CRM_ACTIVITY_DELETED:       'CRM_ACTIVITY_DELETED',
+  CRM_CONTRACT_CREATED:       'CRM_CONTRACT_CREATED',
+  CRM_CONTRACT_UPDATED:       'CRM_CONTRACT_UPDATED',
+  CRM_CONTRACT_DELETED:       'CRM_CONTRACT_DELETED',
 });
 
 module.exports = {
@@ -363,6 +396,8 @@ module.exports = {
   BILLING_CONFIG_MAX_LEVEL,
   SALARY_MANAGE_MAX_LEVEL,
   PAYROLL_VIEW_MAX_LEVEL,
+  VENDOR_MANAGE_MAX_LEVEL,
+  CRM_MANAGE_MAX_LEVEL,
   // Legacy aliases (backward-compat)
   LEAVE_APPROVAL_MIN_LEVEL,
   USER_INVITE_MIN_LEVEL,

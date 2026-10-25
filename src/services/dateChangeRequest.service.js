@@ -70,6 +70,24 @@ async function _resolveManagerIds(entityType, entityId) {
  * Snapshot the current dates from the entity.
  * Returns { currentStartDate, currentEndDate }
  */
+async function _resolveEntityName(entityType, entityId) {
+  try {
+    if (entityType === 'Task') {
+      const t = await db.Task.findByPk(entityId, { attributes: ['title'] });
+      return t?.title || null;
+    }
+    if (entityType === 'SubTask') {
+      const st = await db.SubTask.findByPk(entityId, { attributes: ['title'] });
+      return st?.title || null;
+    }
+    if (entityType === 'Docket') {
+      const d = await db.Docket.findByPk(entityId, { attributes: ['title'] });
+      return d?.title || null;
+    }
+  } catch (_) {}
+  return null;
+}
+
 async function _snapshotCurrentDates(entityType, entityId) {
   if (entityType === 'Docket') {
     const d = await db.Docket.findByPk(entityId, { attributes: ['startDate', 'endDate'] });
@@ -171,13 +189,17 @@ async function requestDateChange({ requestingUser, entityType, entityId, request
     entityId:   request.id,
   });
 
+  const entityTitle = await _resolveEntityName(entityType, entityId);
+  const targetLabel = entityTitle ? `"${entityTitle}"` : entityType;
+
   await writeAuditLog({
     performedBy: requestingUser,
     action:      AUDIT_ACTION.DATE_CHANGE_REQUESTED,
     category:    AUDIT_CATEGORY.TASK,
     entity:      entityType,
     entityId,
-    description: `${requestingUser.firstName} requested date change on ${entityType} ${entityId}` +
+    entityName:  entityTitle || entityType,
+    description: `${requestingUser.firstName} ${requestingUser.lastName} requested date change on ${entityType} ${targetLabel}` +
                  (requestedStartDate ? ` — startDate: ${requestedStartDate}` : '') +
                  (requestedEndDate   ? ` — endDate: ${requestedEndDate}` : ''),
     newValues: { requestedStartDate, requestedEndDate },
@@ -222,13 +244,17 @@ async function approveDateChange({ requestingUser, requestId, comment, req }) {
     entityId:   dcr.id,
   });
 
+  const entityTitle = await _resolveEntityName(dcr.entityType, dcr.entityId);
+  const targetLabel = entityTitle ? `"${entityTitle}"` : dcr.entityType;
+
   await writeAuditLog({
     performedBy: requestingUser,
     action:      AUDIT_ACTION.DATE_CHANGE_APPROVED,
     category:    AUDIT_CATEGORY.TASK,
     entity:      dcr.entityType,
     entityId:    dcr.entityId,
-    description: `Manager approved date-change request ${requestId} for ${dcr.entityType} ${dcr.entityId}`,
+    entityName:  entityTitle || dcr.entityType,
+    description: `Manager approved date-change request for ${dcr.entityType} ${targetLabel}`,
     newValues:   { requestedStartDate: dcr.requestedStartDate, requestedEndDate: dcr.requestedEndDate, comment },
     req,
   });
@@ -265,13 +291,17 @@ async function rejectDateChange({ requestingUser, requestId, comment, req }) {
     entityId:   dcr.id,
   });
 
+  const entityTitle = await _resolveEntityName(dcr.entityType, dcr.entityId);
+  const targetLabel = entityTitle ? `"${entityTitle}"` : dcr.entityType;
+
   await writeAuditLog({
     performedBy: requestingUser,
     action:      AUDIT_ACTION.DATE_CHANGE_REJECTED,
     category:    AUDIT_CATEGORY.TASK,
     entity:      dcr.entityType,
     entityId:    dcr.entityId,
-    description: `Manager rejected date-change request ${requestId} for ${dcr.entityType} ${dcr.entityId}` +
+    entityName:  entityTitle || dcr.entityType,
+    description: `Manager rejected date-change request for ${dcr.entityType} ${targetLabel}` +
                  (comment ? `: "${comment}"` : ''),
     req,
   });

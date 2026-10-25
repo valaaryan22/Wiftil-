@@ -530,10 +530,17 @@ async function removeDependency({ requestingUser, taskId, id, prerequisiteId, re
     );
   }
 
+  const [subTask, prereq] = await Promise.all([
+    db.SubTask.findByPk(id, { attributes: ['id', 'title'] }),
+    db.SubTask.findByPk(prerequisiteId, { attributes: ['id', 'title'] }),
+  ]);
+  const subTaskTitle = subTask?.title || 'SubTask';
+  const prereqTitle = prereq?.title || 'prerequisite';
+
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.DEPENDENCY_REMOVED, category: AUDIT_CATEGORY.TASK,
-    entity: 'SubTask', entityId: id,
-    description: `Removed dependency from prerequisite ${prerequisiteId}`, req,
+    entity: 'SubTask', entityId: id, entityName: subTaskTitle,
+    description: `Removed dependency: "${subTaskTitle}" no longer depends on "${prereqTitle}"`, req,
   });
 
   return getFullSubTask(id);

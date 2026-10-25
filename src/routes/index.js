@@ -36,6 +36,14 @@ const incrementPolicyRoutes = require('./incrementPolicy.routes');
 const attendanceRoutes     = require('./attendance.routes');
 // HRM — Leave Allocation module
 const leaveAllocationRoutes = require('./leaveAllocation.routes');
+// Reports and Analytics (Management Decision System)
+const reportsRoutes        = require('./reports.routes');
+// Vendor and Collaborator Management (External Workforce Hub)
+const vendorRoutes         = require('./vendor.routes');
+// Module X: CRM (Pre-Sales Relationship Management)
+const crmRoutes            = require('./crm.routes');
+// Reminders Module (Workbench & Calendar)
+const reminderRoutes       = require('./reminder.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -95,5 +103,17 @@ router.use('/attendance',         attendanceRoutes);
 
 // ── HRM — Leave Allocation module ─────────────────────────────────────────────
 router.use('/leave-allocations',  leaveAllocationRoutes);
+
+// ── Reports and Analytics (Management Decision System) ──────────────────────────
+router.use('/reports',            reportsRoutes);
+
+// ── Vendor and Collaborator Management (External Workforce Hub) ────────────────
+router.use('/vendors',            vendorRoutes);
+
+// ── Module X: CRM (Pre-Sales Relationship Management) ──────────────────────────
+router.use('/crm',                crmRoutes);
+
+// ── Reminders Module (Workbench & Calendar) ───────────────────────────────────
+router.use('/reminders',          reminderRoutes);
 
 module.exports = router;

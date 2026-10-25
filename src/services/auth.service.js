@@ -253,9 +253,13 @@ async function logout({ refreshToken, userId }) {
     { isRevoked: true },
     { where: { token: refreshToken, userId, isRevoked: false } }
   );
+  const user = await db.User.findByPk(userId, { attributes: ['id', 'firstName', 'lastName'] });
+  const userName = user ? `${user.firstName} ${user.lastName}`.trim() : null;
   await writeAuditLog({
+    performedById: userId, performedByName: userName,
     action: AUDIT_ACTION.USER_LOGGED_OUT, category: AUDIT_CATEGORY.AUTH,
-    entity: 'User', entityId: userId, description: 'User logged out',
+    entity: 'User', entityId: userId, entityName: userName,
+    description: userName ? `User "${userName}" logged out` : 'User logged out',
   });
 }
 
@@ -267,9 +271,13 @@ async function logoutAll({ userId }) {
     { isRevoked: true },
     { where: { userId, isRevoked: false, type: TOKEN_TYPES.REFRESH } }
   );
+  const user = await db.User.findByPk(userId, { attributes: ['id', 'firstName', 'lastName'] });
+  const userName = user ? `${user.firstName} ${user.lastName}`.trim() : null;
   await writeAuditLog({
+    performedById: userId, performedByName: userName,
     action: AUDIT_ACTION.USER_LOGGED_OUT_ALL, category: AUDIT_CATEGORY.AUTH,
-    entity: 'User', entityId: userId, description: 'User logged out of all devices',
+    entity: 'User', entityId: userId, entityName: userName,
+    description: userName ? `User "${userName}" logged out of all devices` : 'User logged out of all devices',
   });
 }
 
@@ -295,10 +303,12 @@ async function changePassword({ userId, currentPassword, newPassword }) {
     { where: { userId, isRevoked: false } }
   );
 
+  const userName = `${user.firstName} ${user.lastName}`.trim();
   await writeAuditLog({
+    performedById: userId, performedByName: userName,
     action: AUDIT_ACTION.PASSWORD_CHANGED, category: AUDIT_CATEGORY.AUTH,
-    entity: 'User', entityId: userId,
-    description: 'Password changed — all sessions invalidated',
+    entity: 'User', entityId: userId, entityName: userName,
+    description: `Password changed for "${userName}" — all sessions invalidated`,
   });
 }
 
