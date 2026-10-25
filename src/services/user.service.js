@@ -62,12 +62,13 @@ async function inviteUser({ requestingUser, data, req }) {
 
   // Level 1 (BOSS) auto-grants all permissions
   const isBoss = requestingUser.roleLevel === 1;
+  const finalDept = (!department || String(department).trim() === '') && (canAccessFinance === true || isBoss) ? 'Finance' : department;
 
   const user = await db.User.create({
     email,
     password: password || `Wiftil@${Math.random().toString(36).slice(2, 10)}!`,
     firstName, lastName, roleId: targetRole.id,
-    department, jobTitle, phone, managerId, isEmailVerified: false,
+    department: finalDept, jobTitle, phone, managerId, isEmailVerified: false,
     profilePicture,
     canAccessFinance: canAccessFinance === true || isBoss,
     canAccessSalary:  canAccessSalary  === true || isBoss,
@@ -166,9 +167,16 @@ async function updateUser({ id, requestingUser, data, req }) {
   const updateData = {};
   allowedFields.forEach((f) => { if (data[f] !== undefined) updateData[f] = data[f]; });
 
-  // Permission flags can only be set by higher-authority users (not self)
-  if (!isSelf && isHigher && requestingUser.roleLevel <= 3) {
-    if (data.canAccessFinance !== undefined) updateData.canAccessFinance = data.canAccessFinance === true || data.canAccessFinance === 'true';
+  // Permission flags can only be set by higher-authority users or Admin/Boss (level <= 2)
+  if (!isSelf && (requestingUser.roleLevel <= 2 || isHigher)) {
+    if (data.canAccessFinance !== undefined) {
+      const grantFinance = data.canAccessFinance === true || data.canAccessFinance === 'true';
+      updateData.canAccessFinance = grantFinance;
+      // If granted finance access and user has no department, assign to 'Finance' department
+      if (grantFinance && (!updateData.department || String(updateData.department).trim() === '') && !target.department) {
+        updateData.department = 'Finance';
+      }
+    }
     if (data.canAccessSalary  !== undefined) updateData.canAccessSalary  = data.canAccessSalary  === true || data.canAccessSalary === 'true';
     if (data.canAccessBanking !== undefined) updateData.canAccessBanking = data.canAccessBanking === true || data.canAccessBanking === 'true';
   }
@@ -177,6 +185,8 @@ async function updateUser({ id, requestingUser, data, req }) {
   userCache.invalidateUser(id);
 
   const updated = await db.User.findByPk(id, { attributes: USER_ATTRS, include: [INCLUDE_ROLE] });
+  const formattedUpdated = formatUser(updated);
+  userCache.setUser(id, formattedUpdated);
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.USER_UPDATED, category: AUDIT_CATEGORY.USER,

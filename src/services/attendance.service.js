@@ -4,6 +4,7 @@ const { Op }            = require('sequelize');
 const { db }            = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
 const { HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
+const officeLocationService = require('./officeLocation.service');
 
 // Standard working hours per day
 const STANDARD_WORK_HOURS = 8;
@@ -106,7 +107,7 @@ async function totalOvertimeHoursForMonth(userId, yearMonth) {
 
 // ── Punch-In ──────────────────────────────────────────────────────────────────
 
-async function punchIn({ requestingUser, notes, req }) {
+async function punchIn({ requestingUser, notes, latitude, longitude, req }) {
   const today = todayDateString();
 
   // Check if already punched in today
@@ -125,11 +126,37 @@ async function punchIn({ requestingUser, notes, req }) {
     }
   }
 
+  // Verify geofence office location
+  const geoResult = await officeLocationService.verifyLocation({ latitude, longitude });
+  if (!geoResult.verified) {
+    const err = new Error(geoResult.message);
+    err.statusCode = HTTP_STATUS.FORBIDDEN;
+    err.meta = {
+      isGeofenceActive: true,
+      reason: geoResult.reason,
+      distance: geoResult.distance,
+      allowedRadius: geoResult.allowedRadius,
+      officeName: geoResult.office?.name,
+    };
+    throw err;
+  }
+
   const punchInTime = new Date();
+  const locFields = {
+    punchInLatitude: latitude != null ? parseFloat(latitude) : null,
+    punchInLongitude: longitude != null ? parseFloat(longitude) : null,
+    punchInDistance: geoResult.distance != null ? geoResult.distance : null,
+    punchInAddress: geoResult.office ? geoResult.office.name : null,
+  };
 
   let record;
   if (existing) {
-    await existing.update({ punchIn: punchInTime, status: 'PRESENT', notes: notes || existing.notes });
+    await existing.update({
+      punchIn: punchInTime,
+      status: 'PRESENT',
+      notes: notes || existing.notes,
+      ...locFields,
+    });
     record = existing;
   } else {
     record = await db.Attendance.create({
@@ -140,6 +167,7 @@ async function punchIn({ requestingUser, notes, req }) {
       workingHours: 0,
       overtimeHours: 0,
       notes: notes || null,
+      ...locFields,
     });
   }
 
@@ -148,7 +176,7 @@ async function punchIn({ requestingUser, notes, req }) {
     action: AUDIT_ACTION.ATTENDANCE_PUNCH_IN || 'ATTENDANCE_PUNCH_IN',
     category: AUDIT_CATEGORY.ATTENDANCE || 'ATTENDANCE',
     entity: 'Attendance', entityId: record.id,
-    description: `${requestingUser.firstName} ${requestingUser.lastName} punched in at ${punchInTime.toISOString()}`,
+    description: `${requestingUser.firstName} ${requestingUser.lastName} punched in at ${punchInTime.toISOString()}${geoResult.office ? ` (Office: ${geoResult.office.name}, ${geoResult.distance}m away)` : ''}`,
     req,
   });
 
@@ -157,7 +185,7 @@ async function punchIn({ requestingUser, notes, req }) {
 
 // ── Punch-Out ─────────────────────────────────────────────────────────────────
 
-async function punchOut({ requestingUser, notes, req }) {
+async function punchOut({ requestingUser, notes, latitude, longitude, req }) {
   const today = todayDateString();
 
   const record = await db.Attendance.findOne({
@@ -173,6 +201,21 @@ async function punchOut({ requestingUser, notes, req }) {
     err.statusCode = HTTP_STATUS.CONFLICT; throw err;
   }
 
+  // Verify geofence office location
+  const geoResult = await officeLocationService.verifyLocation({ latitude, longitude });
+  if (!geoResult.verified) {
+    const err = new Error(geoResult.message);
+    err.statusCode = HTTP_STATUS.FORBIDDEN;
+    err.meta = {
+      isGeofenceActive: true,
+      reason: geoResult.reason,
+      distance: geoResult.distance,
+      allowedRadius: geoResult.allowedRadius,
+      officeName: geoResult.office?.name,
+    };
+    throw err;
+  }
+
   const punchOutTime  = new Date();
   const workingHours  = diffHours(new Date(record.punchIn), punchOutTime);
   const overtimeHours = Math.max(0, parseFloat((workingHours - STANDARD_WORK_HOURS).toFixed(2)));
@@ -181,12 +224,20 @@ async function punchOut({ requestingUser, notes, req }) {
   let status = 'PRESENT';
   if (workingHours < 4) status = 'HALF_DAY';
 
+  const locFields = {
+    punchOutLatitude: latitude != null ? parseFloat(latitude) : null,
+    punchOutLongitude: longitude != null ? parseFloat(longitude) : null,
+    punchOutDistance: geoResult.distance != null ? geoResult.distance : null,
+    punchOutAddress: geoResult.office ? geoResult.office.name : null,
+  };
+
   await record.update({
     punchOut:     punchOutTime,
     workingHours: parseFloat(workingHours.toFixed(2)),
     overtimeHours,
     status,
     notes: notes || record.notes,
+    ...locFields,
   });
 
   await writeAuditLog({
@@ -194,7 +245,7 @@ async function punchOut({ requestingUser, notes, req }) {
     action: AUDIT_ACTION.ATTENDANCE_PUNCH_OUT || 'ATTENDANCE_PUNCH_OUT',
     category: AUDIT_CATEGORY.ATTENDANCE || 'ATTENDANCE',
     entity: 'Attendance', entityId: record.id,
-    description: `${requestingUser.firstName} ${requestingUser.lastName} punched out at ${punchOutTime.toISOString()} — ${workingHours}h worked, ${overtimeHours}h overtime`,
+    description: `${requestingUser.firstName} ${requestingUser.lastName} punched out at ${punchOutTime.toISOString()} — ${workingHours}h worked, ${overtimeHours}h overtime${geoResult.office ? ` (Office: ${geoResult.office.name}, ${geoResult.distance}m away)` : ''}`,
     req,
   });
 
@@ -259,6 +310,211 @@ async function getAttendanceList({ requestingUser, page = 1, limit = 30, date, u
   });
 
   return { records: rows, total: count };
+}
+
+/**
+ * Get monthly day-wise attendance matrix across all users
+ * Returns calendar days, all active employees, and day-wise attendance statuses
+ */
+async function getAttendanceMatrix({ requestingUser, month, department, search }) {
+  if (requestingUser.roleLevel > 3) {
+    const err = new Error('Access denied: Manager or above required');
+    err.statusCode = HTTP_STATUS.FORBIDDEN;
+    throw err;
+  }
+
+  const targetMonth = month || new Date().toISOString().substring(0, 7);
+  const [yearStr, monthStr] = targetMonth.split('-');
+  const year = parseInt(yearStr, 10);
+  const monthNum = parseInt(monthStr, 10);
+  const daysInMonth = new Date(year, monthNum, 0).getDate();
+  const startDate = `${targetMonth}-01`;
+  const endDate = `${targetMonth}-${String(daysInMonth).padStart(2, '0')}`;
+
+  // 1. Fetch active employees
+  const userWhere = { isActive: true, deletedAt: null };
+  if (requestingUser && requestingUser.roleLevel > 3) {
+    userWhere.id = requestingUser.id;
+  }
+  if (department) userWhere.department = department;
+  if (search && search.trim()) {
+    const q = `%${search.trim()}%`;
+    userWhere[Op.or] = [
+      { firstName: { [Op.like]: q } },
+      { lastName: { [Op.like]: q } },
+      { email: { [Op.like]: q } },
+    ];
+  }
+
+  const employees = await db.User.findAll({
+    where: userWhere,
+    attributes: ['id', 'firstName', 'lastName', 'email', 'department', 'jobTitle', 'profilePicture'],
+    order: [['firstName', 'ASC'], ['lastName', 'ASC']],
+  });
+
+  const employeeIds = employees.map((e) => e.id);
+
+  // 2. Fetch all attendance records for this month
+  const attendanceRecords = await db.Attendance.findAll({
+    where: {
+      userId: { [Op.in]: employeeIds },
+      date: { [Op.between]: [startDate, endDate] },
+    },
+    attributes: ['id', 'userId', 'date', 'status', 'punchIn', 'punchOut', 'workingHours', 'overtimeHours', 'notes'],
+  });
+
+  // 3. Fetch approved leaves for this month
+  const leaves = await db.LeaveRequest.findAll({
+    where: {
+      requesterId: { [Op.in]: employeeIds },
+      status: 'APPROVED',
+      startDate: { [Op.lte]: endDate },
+      endDate: { [Op.gte]: startDate },
+    },
+    attributes: ['id', 'requesterId', 'leaveType', 'startDate', 'endDate', 'totalDays', 'halfDayType'],
+  });
+
+  // 4. Fetch holidays for this month
+  let holidays = [];
+  if (db.Holiday) {
+    holidays = await db.Holiday.findAll({
+      where: {
+        date: { [Op.between]: [startDate, endDate] },
+        status: 'ACTIVE',
+      },
+      attributes: ['id', 'name', 'date', 'type'],
+    });
+  }
+
+  const holidaysMap = {};
+  holidays.forEach((h) => {
+    holidaysMap[h.date] = h;
+  });
+
+  const attendanceMap = {};
+  attendanceRecords.forEach((r) => {
+    attendanceMap[`${r.userId}_${r.date}`] = r;
+  });
+
+  // Build calendar days metadata [1..daysInMonth]
+  const calendarDays = [];
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dStr = `${targetMonth}-${String(day).padStart(2, '0')}`;
+    const dateObj = new Date(year, monthNum - 1, day);
+    const dayOfWeek = dateObj.getDay(); // 0 = Sun, 6 = Sat
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+    const holiday = holidaysMap[dStr] || null;
+
+    calendarDays.push({
+      day,
+      date: dStr,
+      dayOfWeek: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dayOfWeek],
+      isWeekend,
+      holiday: holiday ? { id: holiday.id, name: holiday.name, type: holiday.type } : null,
+    });
+  }
+
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  const matrix = employees.map((emp) => {
+    let presentDays = 0;
+    let halfDays = 0;
+    let absentDays = 0;
+    let onLeaveDays = 0;
+    let holidayDays = 0;
+    let totalHours = 0;
+    let totalOvertime = 0;
+
+    const days = calendarDays.map((cDay) => {
+      const key = `${emp.id}_${cDay.date}`;
+      const record = attendanceMap[key];
+
+      let leaveInfo = null;
+      for (const l of leaves) {
+        if (l.requesterId === emp.id && cDay.date >= l.startDate && cDay.date <= l.endDate) {
+          leaveInfo = l;
+          break;
+        }
+      }
+
+      let status = 'NOT_MARKED';
+      let workingHours = 0;
+      let overtimeHours = 0;
+      let punchIn = null;
+      let punchOut = null;
+      let recordId = null;
+
+      if (record) {
+        status = record.status;
+        workingHours = parseFloat(record.workingHours || 0);
+        overtimeHours = parseFloat(record.overtimeHours || 0);
+        punchIn = record.punchIn;
+        punchOut = record.punchOut;
+        recordId = record.id;
+      } else if (leaveInfo) {
+        status = leaveInfo.halfDayType ? 'HALF_DAY' : 'ON_LEAVE';
+      } else if (cDay.holiday) {
+        status = 'HOLIDAY';
+      } else if (cDay.isWeekend) {
+        status = 'WEEKEND';
+      } else {
+        status = 'NOT_MARKED';
+      }
+
+      if (status === 'PRESENT') {
+        presentDays++;
+        totalHours += workingHours;
+        totalOvertime += overtimeHours;
+      } else if (status === 'HALF_DAY') {
+        halfDays++;
+        totalHours += workingHours;
+        totalOvertime += overtimeHours;
+      } else if (status === 'ABSENT') {
+        absentDays++;
+      } else if (status === 'ON_LEAVE') {
+        onLeaveDays++;
+      } else if (status === 'HOLIDAY') {
+        holidayDays++;
+      }
+
+      return {
+        day: cDay.day,
+        date: cDay.date,
+        dayOfWeek: cDay.dayOfWeek,
+        isWeekend: cDay.isWeekend,
+        status,
+        workingHours,
+        overtimeHours,
+        punchIn,
+        punchOut,
+        recordId,
+        holidayName: cDay.holiday?.name,
+        leaveType: leaveInfo?.leaveType,
+      };
+    });
+
+    return {
+      employee: emp,
+      summary: {
+        presentDays,
+        halfDays,
+        absentDays,
+        onLeaveDays,
+        holidayDays,
+        totalHours: parseFloat(totalHours.toFixed(2)),
+        totalOvertime: parseFloat(totalOvertime.toFixed(2)),
+      },
+      days,
+    };
+  });
+
+  return {
+    month: targetMonth,
+    daysInMonth,
+    calendarDays,
+    matrix,
+    totalEmployees: employees.length,
+  };
 }
 
 async function getTodaySummary() {
@@ -375,6 +631,7 @@ module.exports = {
   punchOut,
   getMyAttendance,
   getAttendanceList,
+  getAttendanceMatrix,
   getTodaySummary,
   getTodayRecord,
   manualOverride,

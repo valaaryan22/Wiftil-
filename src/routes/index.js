@@ -44,6 +44,10 @@ const vendorRoutes         = require('./vendor.routes');
 const crmRoutes            = require('./crm.routes');
 // Reminders Module (Workbench & Calendar)
 const reminderRoutes       = require('./reminder.routes');
+// HRM — Holidays Module
+const holidayRoutes        = require('./holiday.routes');
+// HRM — Office Locations & Geofence
+const officeLocationRoutes = require('./officeLocation.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -115,5 +119,11 @@ router.use('/crm',                crmRoutes);
 
 // ── Reminders Module (Workbench & Calendar) ───────────────────────────────────
 router.use('/reminders',          reminderRoutes);
+
+// ── HRM — Holidays Module ────────────────────────────────────────────────────
+router.use('/holidays',           holidayRoutes);
+
+// ── HRM — Office Locations & Geofence ─────────────────────────────────────────
+router.use('/office-locations',   officeLocationRoutes);
 
 module.exports = router;

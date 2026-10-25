@@ -8,6 +8,8 @@ async function punchIn(req, res, next) {
     const record = await attendanceService.punchIn({
       requestingUser: req.user,
       notes: req.body.notes,
+      latitude: req.body.latitude,
+      longitude: req.body.longitude,
       req,
     });
     return successResponse(res, { statusCode: 201, message: 'Punched in successfully', data: { record } });
@@ -19,6 +21,8 @@ async function punchOut(req, res, next) {
     const record = await attendanceService.punchOut({
       requestingUser: req.user,
       notes: req.body.notes,
+      latitude: req.body.latitude,
+      longitude: req.body.longitude,
       req,
     });
     return successResponse(res, { message: 'Punched out successfully', data: { record } });
@@ -59,6 +63,22 @@ async function getAttendanceList(req, res, next) {
   } catch (err) { next(err); }
 }
 
+async function getAttendanceMatrix(req, res, next) {
+  try {
+    const { month, department, search } = req.query;
+    const matrixData = await attendanceService.getAttendanceMatrix({
+      requestingUser: req.user,
+      month,
+      department,
+      search,
+    });
+    return successResponse(res, {
+      message: 'Attendance matrix retrieved successfully',
+      data: matrixData,
+    });
+  } catch (err) { next(err); }
+}
+
 async function manualOverride(req, res, next) {
   try {
     const record = await attendanceService.manualOverride({
@@ -85,6 +105,7 @@ module.exports = {
   getTodayRecord,
   getTodaySummary,
   getAttendanceList,
+  getAttendanceMatrix,
   manualOverride,
   getMonthlySummary,
 };

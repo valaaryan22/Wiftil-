@@ -26,6 +26,7 @@ router.get('/today',      ctrl.getTodayRecord);
 // GET  /attendance/summary/:userId/:month — monthly summary for payroll
 
 router.get('/summary/today',            authorizeLevel(3), ctrl.getTodaySummary);
+router.get('/matrix',                   ctrl.getAttendanceMatrix);
 router.get('/',                         authorizeLevel(3), ctrl.getAttendanceList);
 router.post('/override',               authorizeLevel(2), ctrl.manualOverride);
 router.get('/summary/:userId/:month',  authorizeLevel(3), ctrl.getMonthlySummary);

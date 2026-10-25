@@ -58,6 +58,46 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    punchInLatitude: {
+      type: DataTypes.DECIMAL(10, 8),
+      allowNull: true,
+      field: 'punch_in_latitude',
+    },
+    punchInLongitude: {
+      type: DataTypes.DECIMAL(11, 8),
+      allowNull: true,
+      field: 'punch_in_longitude',
+    },
+    punchInDistance: {
+      type: DataTypes.DECIMAL(8, 2),
+      allowNull: true,
+      field: 'punch_in_distance',
+    },
+    punchInAddress: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      field: 'punch_in_address',
+    },
+    punchOutLatitude: {
+      type: DataTypes.DECIMAL(10, 8),
+      allowNull: true,
+      field: 'punch_out_latitude',
+    },
+    punchOutLongitude: {
+      type: DataTypes.DECIMAL(11, 8),
+      allowNull: true,
+      field: 'punch_out_longitude',
+    },
+    punchOutDistance: {
+      type: DataTypes.DECIMAL(8, 2),
+      allowNull: true,
+      field: 'punch_out_distance',
+    },
+    punchOutAddress: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      field: 'punch_out_address',
+    },
     markedById: {
       // If attendance was manually set by an admin
       type: DataTypes.UUID,

@@ -45,6 +45,10 @@ function authorizeLevel(maxLevel) {
 
     const userLevel = req.user.roleLevel || 999;
     if (userLevel > maxLevel) {
+      // Allow users with explicit canAccessFinance flag to access finance-related routes (threshold <= 3)
+      if (req.user.canAccessFinance === true && maxLevel >= 3) {
+        return next();
+      }
       return errorResponse(res, {
         statusCode: HTTP_STATUS.FORBIDDEN,
         message: `Access denied. Required access level ≤ ${maxLevel} (your level: ${userLevel})`,

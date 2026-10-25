@@ -312,4 +312,31 @@ async function changePassword({ userId, currentPassword, newPassword }) {
   });
 }
 
-module.exports = { register, login, refreshTokens, logout, logoutAll, changePassword };
+/**
+ * Get current profile with latest DB permissions and role details
+ */
+async function getMe(userId) {
+  const user = await db.User.findByPk(userId, {
+    attributes: [
+      'id', 'email', 'firstName', 'lastName', 'phone', 'department', 'jobTitle',
+      'isActive', 'isEmailVerified', 'profilePicture', 'managerId',
+      'canAccessFinance', 'canAccessSalary', 'canAccessBanking',
+    ],
+    include: [{
+      model: db.RoleDefinition,
+      as: 'role',
+      attributes: ['id', 'name', 'displayName', 'accessLevel', 'color'],
+    }],
+  });
+  if (!user) return null;
+  const userJson = user.toJSON();
+  if (user.role) {
+    userJson.roleLevel = user.role.accessLevel;
+    userJson.roleName = user.role.name;
+    userJson.roleDisplay = user.role.displayName;
+    userJson.roleColor = user.role.color;
+  }
+  return userJson;
+}
+
+module.exports = { register, login, refreshTokens, logout, logoutAll, changePassword, getMe };

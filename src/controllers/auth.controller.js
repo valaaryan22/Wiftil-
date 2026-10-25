@@ -73,9 +73,10 @@ async function changePassword(req, res, next) {
 
 async function me(req, res, next) {
   try {
+    const freshUser = await authService.getMe(req.user.id);
     return successResponse(res, {
       message: 'Profile fetched',
-      data: { user: req.user },
+      data: { user: freshUser || req.user },
     });
   } catch (err) {
     next(err);

@@ -82,6 +82,10 @@ const modelFiles = [
   require('./DealContract.js')(sequelize, Sequelize.DataTypes),
   // Reminders module (Workbench & Calendar)
   require('./Reminder.js')(sequelize, Sequelize.DataTypes),
+  // HRM — Holidays module
+  require('./Holiday.js')(sequelize, Sequelize.DataTypes),
+  // HRM — Office Locations & Geofencing
+  require('./OfficeLocation.js')(sequelize, Sequelize.DataTypes),
 ];
 
 modelFiles.forEach(model => {
