@@ -13,7 +13,7 @@ async function createDocket(req, res, next) {
       data: req.body,
       req,
     });
-    return successResponse(res, { statusCode: 201, message: 'Docket created in DRAFT mode', data: docket });
+    return successResponse(res, { statusCode: 201, message: 'Project created in DRAFT mode', data: docket });
   } catch (e) { next(e); }
 }
 
@@ -46,14 +46,14 @@ async function updateDocket(req, res, next) {
       data: req.body,
       req,
     });
-    return successResponse(res, { message: 'Docket updated', data: docket });
+    return successResponse(res, { message: 'Project updated', data: docket });
   } catch (e) { next(e); }
 }
 
 async function deleteDocket(req, res, next) {
   try {
     await docketService.deleteDocket({ requestingUser: req.user, docketId: req.params.docketId, req });
-    return successResponse(res, { message: 'Docket cancelled' });
+    return successResponse(res, { message: 'Project cancelled' });
   } catch (e) { next(e); }
 }
 
@@ -66,7 +66,7 @@ async function publishDocket(req, res, next) {
       docketId: req.params.docketId,
       req,
     });
-    return successResponse(res, { message: 'Docket published', data: docket });
+    return successResponse(res, { message: 'Project published', data: docket });
   } catch (e) { next(e); }
 }
 
@@ -87,7 +87,7 @@ async function addDocketManager(req, res, next) {
       data: req.body,
       req,
     });
-    return successResponse(res, { statusCode: 201, message: 'Manager assigned to docket', data: manager });
+    return successResponse(res, { statusCode: 201, message: 'Manager assigned to project', data: manager });
   } catch (e) { next(e); }
 }
 
@@ -99,7 +99,7 @@ async function removeDocketManager(req, res, next) {
       managerId: req.params.managerId,
       req,
     });
-    return successResponse(res, { message: 'Manager removed from docket' });
+    return successResponse(res, { message: 'Manager removed from project' });
   } catch (e) { next(e); }
 }
 
@@ -113,7 +113,7 @@ async function linkTaskToDocket(req, res, next) {
       taskId: req.params.taskId,
       req,
     });
-    return successResponse(res, { message: 'Task linked to docket', data: task });
+    return successResponse(res, { message: 'Ticket linked to project', data: task });
   } catch (e) { next(e); }
 }
 
@@ -125,7 +125,7 @@ async function unlinkTaskFromDocket(req, res, next) {
       taskId: req.params.taskId,
       req,
     });
-    return successResponse(res, { message: 'Task unlinked from docket', data: task });
+    return successResponse(res, { message: 'Ticket unlinked from project', data: task });
   } catch (e) { next(e); }
 }
 

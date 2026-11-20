@@ -3,6 +3,7 @@
 const express    = require('express');
 const router     = express.Router();
 const ctrl       = require('../controllers/task.controller');
+const taskChainCtrl = require('../controllers/taskChain.controller');
 const { authenticate }   = require('../middlewares/auth.middleware');
 const { authorizeLevel } = require('../middlewares/authorize.middleware');
 
@@ -27,5 +28,8 @@ router.post('/:id/assign-leads',    authorizeLevel(3), ctrl.assignTeamLeads); //
 router.post('/:id/submit',          authorizeLevel(4), ctrl.submitTask);      // Team Lead (level ≤ 4)
 router.post('/:id/approve',         authorizeLevel(3), ctrl.approveTask);     // Manager
 router.post('/:id/reopen',          authorizeLevel(3), ctrl.reopenTask);      // Manager or Admin
+
+// ── Apply Task Chain to Task / Ticket ─────────────────────────────────────────
+router.post('/:taskId/apply-chain', authorizeLevel(4), taskChainCtrl.applyTaskChainToTask);
 
 module.exports = router;

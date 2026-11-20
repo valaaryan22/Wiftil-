@@ -48,6 +48,8 @@ const reminderRoutes       = require('./reminder.routes');
 const holidayRoutes        = require('./holiday.routes');
 // HRM — Office Locations & Geofence
 const officeLocationRoutes = require('./officeLocation.routes');
+// Task Chains / Predefined Sub-Task Templates module
+const taskChainRoutes      = require('./taskChain.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -72,26 +74,33 @@ router.use('/clients/:clientId/contacts', clientContactRoutes);
 router.use('/clients/:clientId/comms',    clientCommunicationLogRoutes);
 router.use('/clients/:clientId/packages', packageRoutes);
 router.use('/clients/:clientId/dockets',    docketRoutes);
+router.use('/clients/:clientId/projects',   docketRoutes);
 router.use('/clients/:clientId/documents',  clientDocumentRoutes);
 router.use('/clients/:clientId/payments',   clientPaymentRoutes);
 
 // ── Dashboard module (user-specific) ────────────────────────────────────────
 router.use('/dashboard', dashboardRoutes);
 
-// ── Task management module ────────────────────────────────────────────────────
+// ── Task management module (Tickets & Tasks) ──────────────────────────────
 router.use('/tasks',                                          taskRoutes);
 router.use('/tasks/:taskId/subtasks',                         subTaskRoutes);
+router.use('/tickets',                                        taskRoutes);
+router.use('/tickets/:taskId/tasks',                          subTaskRoutes);
 router.use('/performance',                                    performanceRoutes);
 router.use('/comments',                                       commentRoutes);
 router.use('/notifications',                                  notificationRoutes);
 
-// ── Package / Docket / Service module ────────────────────────────────────────
+// ── Package / Docket / Service module (Projects & Services) ────────────────
 router.use('/services',  serviceRoutes);
 router.use('/packages',  packageItemRoutes);
 router.use('/dockets',   docketItemRoutes);
+router.use('/projects',  docketItemRoutes);
 
 // ── Date Change Requests module ───────────────────────────────────────────────
 router.use('/date-change-requests', dateChangeRequestRoutes);
+
+// ── Task Chains & Templates module ────────────────────────────────────────────
+router.use('/task-chains', taskChainRoutes);
 
 // ── Finance & Accounting module ───────────────────────────────────────────────
 router.use('/finance',       financeRoutes);

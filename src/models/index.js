@@ -86,6 +86,8 @@ const modelFiles = [
   require('./Holiday.js')(sequelize, Sequelize.DataTypes),
   // HRM — Office Locations & Geofencing
   require('./OfficeLocation.js')(sequelize, Sequelize.DataTypes),
+  // Task Chains / Predefined Sub-Task Templates module
+  require('./TaskChain.js')(sequelize, Sequelize.DataTypes),
 ];
 
 modelFiles.forEach(model => {

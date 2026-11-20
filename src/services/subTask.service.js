@@ -312,7 +312,7 @@ async function assignSubTask({ requestingUser, taskId, id, assignments, req }) {
 
   for (const m of members) {
     await _createNotification(m.id, {
-      type: 'SUBTASK_ASSIGNED', title: 'New Sub-Task Assigned',
+      type: 'SUBTASK_ASSIGNED', title: 'New Task Assigned',
       message: unmetDeps > 0
         ? `You have been assigned "${subTask.title}" (locked — waiting on dependencies)`
         : `You have been assigned "${subTask.title}" — ready to start!`,
@@ -364,7 +364,7 @@ async function submitSubTask({ requestingUser, taskId, id, actualHours, req }) {
   });
 
   await _createNotification(subTask.createdById, {
-    type: 'SUBTASK_SUBMITTED', title: 'Sub-Task Submitted for Review',
+    type: 'SUBTASK_SUBMITTED', title: 'Task Submitted for Review',
     message: `"${subTask.title}" has been submitted for your review`, entityType: 'SubTask', entityId: id,
   });
 
@@ -413,7 +413,7 @@ async function approveSubTask({ requestingUser, taskId, id, comment, req }) {
       if (unlocked) {
         for (const a of unlocked.assignments) {
           await _createNotification(a.memberId, {
-            type: 'DEPENDENCY_UNLOCKED', title: 'Sub-Task Unlocked!',
+            type: 'DEPENDENCY_UNLOCKED', title: 'Task Unlocked!',
             message: `"${unlocked.title}" is now available to start`, entityType: 'SubTask', entityId: link.subTaskId,
           });
         }
@@ -435,8 +435,8 @@ async function approveSubTask({ requestingUser, taskId, id, comment, req }) {
 
   for (const a of subTask.assignments) {
     await _createNotification(a.memberId, {
-      type: 'SUBTASK_APPROVED', title: 'Sub-Task Approved!',
-      message: `Your sub-task "${subTask.title}" has been approved`, entityType: 'SubTask', entityId: id,
+      type: 'SUBTASK_APPROVED', title: 'Task Approved!',
+      message: `Your task "${subTask.title}" has been approved`, entityType: 'SubTask', entityId: id,
     });
   }
 
@@ -469,7 +469,7 @@ async function rejectSubTask({ requestingUser, taskId, id, comment, req }) {
 
   for (const a of subTask.assignments) {
     await _createNotification(a.memberId, {
-      type: 'SUBTASK_REJECTED', title: 'Sub-Task Needs Rework',
+      type: 'SUBTASK_REJECTED', title: 'Task Needs Rework',
       message: `"${subTask.title}" was rejected: "${comment}"`, entityType: 'SubTask', entityId: id,
     });
   }

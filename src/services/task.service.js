@@ -133,8 +133,8 @@ async function createTask({ requestingUser, title, description, priority, startD
 
   if (managerId) {
     await _createNotifications([managerId], {
-      type: 'TASK_ASSIGNED', title: 'New Task Assigned',
-      message: `You have been assigned a new task: "${task.title}"`, entityType: 'Task', entityId: task.id,
+      type: 'TASK_ASSIGNED', title: 'New Ticket Assigned',
+      message: `You have been assigned a new ticket: "${task.title}"`, entityType: 'Task', entityId: task.id,
     });
   }
 
@@ -187,9 +187,13 @@ async function getTaskById({ id, requestingUser }) {
         model: db.SubTask, as: 'subTasks',
         include: [
           USER_SNAP_INCLUDE('createdBy'),
+          USER_SNAP_INCLUDE('reviewedBy'),
           {
             model: db.SubTaskAssignment, as: 'assignments',
-            include: [USER_SNAP_INCLUDE('member')],
+            include: [
+              USER_SNAP_INCLUDE('member'),
+              { model: db.User, as: 'assignedBy', attributes: ['id', 'firstName', 'lastName'] },
+            ],
           },
           {
             model: db.SubTaskDependency, as: 'dependencies',
@@ -203,6 +207,24 @@ async function getTaskById({ id, requestingUser }) {
 
   if (!task) notFound();
   _assertCanViewTask(requestingUser, task);
+
+  // Fetch chronological audit history for this ticket
+  try {
+    const auditLogs = await db.AuditLog.findAll({
+      where: {
+        [Op.or]: [
+          { entityId: id },
+          { entity: 'Task', entityId: id },
+        ],
+      },
+      attributes: ['id', 'action', 'category', 'performedByName', 'performedByRole', 'targetUserName', 'description', 'createdAt'],
+      order: [['createdAt', 'ASC']],
+    });
+    task.setDataValue('auditLogs', auditLogs);
+  } catch (err) {
+    task.setDataValue('auditLogs', []);
+  }
+
   return task;
 }
 
@@ -278,8 +300,8 @@ async function assignManager({ id, requestingUser, managerId, req }) {
   });
 
   await _createNotifications([managerId], {
-    type: 'TASK_ASSIGNED', title: 'New Task Assigned',
-    message: `You have been assigned task: "${task.title}"`, entityType: 'Task', entityId: id,
+    type: 'TASK_ASSIGNED', title: 'New Ticket Assigned',
+    message: `You have been assigned ticket: "${task.title}"`, entityType: 'Task', entityId: id,
   });
 
   return updated;
@@ -301,8 +323,8 @@ async function acceptTask({ id, requestingUser, remark, req }) {
     description: `Manager accepted task "${task.title}"${remark ? `: "${remark}"` : ''}`, req,
   });
   await _createNotifications([task.createdById], {
-    type: 'TASK_ACCEPTED', title: 'Task Accepted',
-    message: `Your task "${task.title}" was accepted by the manager`, entityType: 'Task', entityId: id,
+    type: 'TASK_ACCEPTED', title: 'Ticket Accepted',
+    message: `Your ticket "${task.title}" was accepted by the manager`, entityType: 'Task', entityId: id,
   });
 
   return updated;
@@ -328,8 +350,8 @@ async function rejectTask({ id, requestingUser, remark, req }) {
     description: `Manager rejected task "${task.title}": "${remark}"`, req,
   });
   await _createNotifications([task.createdById], {
-    type: 'TASK_REJECTED', title: 'Task Rejected',
-    message: `Your task "${task.title}" was rejected: "${remark}"`, entityType: 'Task', entityId: id,
+    type: 'TASK_REJECTED', title: 'Ticket Rejected',
+    message: `Your ticket "${task.title}" was rejected: "${remark}"`, entityType: 'Task', entityId: id,
   });
 
   return updated;
@@ -373,8 +395,8 @@ async function assignTeamLeads({ id, requestingUser, teamLeadIds, req }) {
     newValues: { teamLeadIds }, req,
   });
   await _createNotifications(teamLeadIds, {
-    type: 'TASK_ASSIGNED', title: 'Task Assigned to You',
-    message: `You have been assigned task: "${task.title}"`, entityType: 'Task', entityId: id,
+    type: 'TASK_ASSIGNED', title: 'Ticket Assigned to You',
+    message: `You have been assigned ticket: "${task.title}"`, entityType: 'Task', entityId: id,
   });
 
   return updated;
@@ -420,8 +442,8 @@ async function submitTask({ id, requestingUser, req }) {
   });
   if (task.managerId) {
     await _createNotifications([task.managerId], {
-      type: 'TASK_SUBMITTED', title: 'Task Submitted for Approval',
-      message: `Task "${task.title}" has been submitted for your approval`, entityType: 'Task', entityId: id,
+      type: 'TASK_SUBMITTED', title: 'Ticket Submitted for Approval',
+      message: `Ticket "${task.title}" has been submitted for your approval`, entityType: 'Task', entityId: id,
     });
   }
 
@@ -447,8 +469,8 @@ async function approveTask({ id, requestingUser, remark, req }) {
   const assignments = await db.TaskAssignment.findAll({ where: { taskId: id }, attributes: ['teamLeadId'] });
   const leadIds = assignments.map(a => a.teamLeadId);
   await _createNotifications([task.createdById, ...leadIds], {
-    type: 'TASK_APPROVED', title: 'Task Approved!',
-    message: `Task "${task.title}" has been approved and marked complete`, entityType: 'Task', entityId: id,
+    type: 'TASK_APPROVED', title: 'Ticket Approved!',
+    message: `Ticket "${task.title}" has been approved and marked complete`, entityType: 'Task', entityId: id,
   });
 
   return updated;
