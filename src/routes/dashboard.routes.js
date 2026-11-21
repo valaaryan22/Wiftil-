@@ -86,6 +86,14 @@ const performanceFilters = [
   query('ratingType').optional().isIn(['SUBTASK', 'DIRECT']).withMessage('ratingType must be SUBTASK or DIRECT'),
 ];
 
+const followUpFilters = [
+  ...paginationQ,
+  query('status').optional().isIn(['PENDING', 'COMPLETED', 'ALL']).withMessage('Invalid status'),
+  query('search').optional().isString().trim(),
+  query('dateFrom').optional().isISO8601(),
+  query('dateTo').optional().isISO8601(),
+];
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 /**
@@ -149,5 +157,18 @@ router.get('/performance', performanceFilters, validate, dashboardController.get
  * Optional: ?page=1&limit=20
  */
 router.get('/activity', paginationQ, validate, dashboardController.getActivity);
+
+/**
+ * GET /dashboard/follow-ups
+ * Client communication follow-ups where followUpDate is set.
+ * Optional: ?status=PENDING&search=keyword&page=1&limit=50
+ */
+router.get('/follow-ups', followUpFilters, validate, dashboardController.getFollowUps);
+
+/**
+ * PATCH /dashboard/follow-ups/:logId/toggle
+ * Toggle or set followUpDone
+ */
+router.patch('/follow-ups/:logId/toggle', dashboardController.toggleFollowUp);
 
 module.exports = router;

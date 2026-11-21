@@ -323,6 +323,58 @@ async function assignSubTask({ requestingUser, taskId, id, assignments, req }) {
   return getFullSubTask(id);
 }
 
+async function selfAssignSubTask({ requestingUser, taskId, id, req }) {
+  const task = await _getTask(taskId);
+  if (!['ACCEPTED', 'IN_PROGRESS', 'REOPENED'].includes(task.status)) {
+    conflict(`Cannot assign tasks when ticket status is "${task.status}"`);
+  }
+
+  const subTask = await db.SubTask.findOne({
+    where: { id, taskId },
+    attributes: ['id', 'title', 'status'],
+    include: [{ model: db.SubTaskAssignment, as: 'assignments', attributes: ['memberId'] }],
+  });
+  if (!subTask) notFound();
+
+  const assignable = ['CREATED', 'ASSIGNED', 'LOCKED', 'AVAILABLE', 'REOPENED', 'TEAM_LEAD_REJECTED'];
+  if (!assignable.includes(subTask.status)) {
+    conflict(`Cannot self-assign task in status "${subTask.status}"`);
+  }
+
+  const alreadyAssigned = subTask.assignments?.some(a => a.memberId === requestingUser.id);
+  if (alreadyAssigned) {
+    badReq('You are already assigned to this sub-task');
+  }
+
+  // Check dependencies
+  const unmetDeps = await _countUnmetDeps(id);
+  const newStatus = unmetDeps > 0 ? SUBTASK_STATUS.LOCKED : SUBTASK_STATUS.AVAILABLE;
+
+  // Replace assignments with self (100%)
+  await db.SubTaskAssignment.destroy({ where: { subTaskId: id } });
+  await db.SubTaskAssignment.create({
+    subTaskId: id,
+    memberId: requestingUser.id,
+    contribution: 100,
+    assignedById: requestingUser.id,
+  });
+  await subTask.update({ status: newStatus });
+
+  await writeAuditLog({
+    performedBy: requestingUser,
+    action: AUDIT_ACTION.SUBTASK_ASSIGNED,
+    category: AUDIT_CATEGORY.TASK,
+    entity: 'SubTask',
+    entityId: id,
+    entityName: subTask.title,
+    description: `User ${requestingUser.firstName} ${requestingUser.lastName} self-assigned to sub-task "${subTask.title}"`,
+    newValues: { assignments: [{ memberId: requestingUser.id, contribution: 100 }] },
+    req,
+  });
+
+  return getFullSubTask(id);
+}
+
 // ─── MEMBER WORKFLOW ───────────────────────────────────────────────────────────
 
 async function startSubTask({ requestingUser, taskId, id, req }) {
@@ -558,8 +610,21 @@ async function _getMemberSubTask(id, taskId, user) {
   if (user.roleLevel > 1) {
     // Not BOSS: verify assignment
     const subTaskJson = subTask.toJSON ? subTask.toJSON() : subTask;
-    const isAssigned = subTaskJson.assignments.some(a => a.memberId === user.id);
-    if (!isAssigned) forbidden('Not assigned to this sub-task');
+    const isAssigned = subTaskJson.assignments && subTaskJson.assignments.some(a => a.memberId === user.id);
+    if (!isAssigned) {
+      // If task is currently unassigned and in startable status, auto-assign to user on start
+      if ((!subTaskJson.assignments || subTaskJson.assignments.length === 0) &&
+          ['AVAILABLE', 'ASSIGNED', 'REOPENED', 'TEAM_LEAD_REJECTED'].includes(subTask.status)) {
+        await db.SubTaskAssignment.create({
+          subTaskId: id,
+          memberId: user.id,
+          contribution: 100,
+          assignedById: user.id,
+        });
+        return subTask;
+      }
+      forbidden('Not assigned to this sub-task');
+    }
   }
   return subTask;
 }
@@ -597,7 +662,7 @@ async function _hasCycle(startId, newPrereqId) {
 
 module.exports = {
   createSubTask, getSubTasks, getSubTaskById, updateSubTask, deleteSubTask,
-  assignSubTask, startSubTask, submitSubTask,
+  assignSubTask, selfAssignSubTask, startSubTask, submitSubTask,
   approveSubTask, rejectSubTask,
   addDependency, removeDependency,
 };

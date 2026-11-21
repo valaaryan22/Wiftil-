@@ -21,65 +21,124 @@ function diffHours(start, end) {
   return parseFloat(((end - start) / (1000 * 60 * 60)).toFixed(2));
 }
 
-/** Get total working days in a month (Mon-Fri only) */
-function workingDaysInMonth(yearMonth) {
-  // yearMonth: "YYYY-MM"
+/**
+ * Detailed Working Days calculation:
+ * - Saturday is a normal working day.
+ * - Sunday is weekly off.
+ * - Holidays configured in the DB with status 'ACTIVE' (on Mon-Sat) are non-working holiday days.
+ */
+async function getWorkingDaysDetails(yearMonth) {
   const [y, m] = yearMonth.split('-').map(Number);
   const daysInMonth = new Date(y, m, 0).getDate();
-  let count = 0;
-  for (let d = 1; d <= daysInMonth; d++) {
-    const day = new Date(y, m - 1, d).getDay();
-    if (day !== 0 && day !== 6) count++;
+  const startDate = `${yearMonth}-01`;
+  const endDate = `${yearMonth}-${String(daysInMonth).padStart(2, '0')}`;
+
+  let holidays = [];
+  if (db.Holiday) {
+    holidays = await db.Holiday.findAll({
+      where: {
+        date: { [Op.between]: [startDate, endDate] },
+        status: 'ACTIVE',
+      },
+      attributes: ['id', 'name', 'date', 'type'],
+    });
   }
-  return count;
+
+  const holidaysMap = {};
+  for (const h of holidays) {
+    holidaysMap[h.date] = h;
+  }
+
+  let sundaysCount = 0;
+  let holidaysCount = 0;
+  let workingDays = 0;
+  const nonSundayHolidays = [];
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateObj = new Date(y, m - 1, d);
+    const dayOfWeek = dateObj.getDay(); // 0 = Sun, 6 = Sat
+    const dStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
+    const holiday = holidaysMap[dStr];
+
+    if (dayOfWeek === 0) {
+      // Sunday is weekly off
+      sundaysCount++;
+    } else if (holiday) {
+      // Configured holiday falling on Monday-Saturday
+      holidaysCount++;
+      nonSundayHolidays.push({ date: dStr, name: holiday.name, type: holiday.type });
+    } else {
+      // Monday through Saturday (excluding holidays) are working days
+      workingDays++;
+    }
+  }
+
+  return {
+    month: yearMonth,
+    totalDays: daysInMonth,
+    sundaysCount,
+    holidaysCount,
+    workingDays,
+    holidays: nonSundayHolidays,
+  };
+}
+
+/** Get total working days in a month (Mon-Sat, excluding Sundays and configured holidays) */
+async function workingDaysInMonth(yearMonth) {
+  const details = await getWorkingDaysDetails(yearMonth);
+  return details.workingDays;
 }
 
 /** Count absent / leave days for an employee in a given month (for deduction calc) */
 async function countAbsentDaysForMonth(userId, yearMonth) {
+  const details = await getWorkingDaysDetails(yearMonth);
+  const workingDays = details.workingDays;
   const [y, m] = yearMonth.split('-').map(Number);
   const startOfMonth = `${yearMonth}-01`;
   const daysInMonth  = new Date(y, m, 0).getDate();
   const endOfMonth   = `${yearMonth}-${String(daysInMonth).padStart(2, '0')}`;
 
-  // Count attendance records marked ABSENT or HALF_DAY
-  const absentRecords = await db.Attendance.findAll({
+  // Count attendance records marked PRESENT and HALF_DAY
+  const records = await db.Attendance.findAll({
     where: {
       userId,
-      date:   { [Op.between]: [startOfMonth, endOfMonth] },
-      status: { [Op.in]: ['ABSENT', 'HALF_DAY'] },
+      date: { [Op.between]: [startOfMonth, endOfMonth] },
+      status: { [Op.in]: ['PRESENT', 'HALF_DAY'] },
     },
     attributes: ['id', 'date', 'status'],
   });
 
-  let absentDays = 0;
-  for (const rec of absentRecords) {
-    absentDays += rec.status === 'HALF_DAY' ? 0.5 : 1;
+  let presentDays = 0;
+  for (const rec of records) {
+    presentDays += rec.status === 'HALF_DAY' ? 0.5 : 1;
   }
 
-  // Also count APPROVED leave days that are UNPAID
-  const unpaidLeaves = await db.LeaveRequest.findAll({
+  // Count APPROVED leave days that are NOT UNPAID (paid leaves count as attended/payable)
+  const paidLeaves = await db.LeaveRequest.findAll({
     where: {
       requesterId: userId,
-      leaveType: 'UNPAID',
+      leaveType: { [Op.ne]: 'UNPAID' },
       status: 'APPROVED',
       startDate: { [Op.lte]: endOfMonth },
       endDate:   { [Op.gte]: startOfMonth },
     },
   });
 
-  for (const leave of unpaidLeaves) {
+  for (const leave of paidLeaves) {
     const ls = new Date(Math.max(new Date(leave.startDate), new Date(startOfMonth)));
     const le = new Date(Math.min(new Date(leave.endDate),   new Date(endOfMonth)));
-    let days = 0;
     const cur = new Date(ls);
     while (cur <= le) {
       const day = cur.getDay();
-      if (day !== 0 && day !== 6) days++;
+      // Only count working days (not Sunday)
+      if (day !== 0) {
+        presentDays += leave.halfDayType ? 0.5 : 1;
+      }
       cur.setDate(cur.getDate() + 1);
     }
-    absentDays += days;
   }
 
+  const absentDays = Math.max(0, parseFloat((workingDays - presentDays).toFixed(2)));
   return absentDays;
 }
 
@@ -402,7 +461,7 @@ async function getAttendanceMatrix({ requestingUser, month, department, search }
     const dStr = `${targetMonth}-${String(day).padStart(2, '0')}`;
     const dateObj = new Date(year, monthNum - 1, day);
     const dayOfWeek = dateObj.getDay(); // 0 = Sun, 6 = Sat
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+    const isWeekend = dayOfWeek === 0; // Only Sunday is weekly off; Saturday is a working day
     const holiday = holidaysMap[dStr] || null;
 
     calendarDays.push({
@@ -598,31 +657,74 @@ async function manualOverride({ requestingUser, data, req }) {
 }
 
 async function getMonthlySummary(userId, yearMonth) {
+  const workingDaysDetails = await getWorkingDaysDetails(yearMonth);
+  const { workingDays, totalDays, sundaysCount, holidaysCount, holidays } = workingDaysDetails;
   const [y, m] = yearMonth.split('-').map(Number);
-  const daysInMonth = new Date(y, m, 0).getDate();
-  const startDate   = `${yearMonth}-01`;
-  const endDate     = `${yearMonth}-${String(daysInMonth).padStart(2, '0')}`;
+  const startDate = `${yearMonth}-01`;
+  const endDate   = `${yearMonth}-${String(totalDays).padStart(2, '0')}`;
 
   const records = await db.Attendance.findAll({
     where: {
       userId,
       date: { [Op.between]: [startDate, endDate] },
     },
-    attributes: ['date', 'status', 'workingHours', 'overtimeHours'],
+    attributes: ['id', 'date', 'status', 'punchIn', 'punchOut', 'workingHours', 'overtimeHours'],
     order: [['date', 'ASC']],
   });
 
-  const workingDays  = workingDaysInMonth(yearMonth);
-  const absentDays   = await countAbsentDaysForMonth(userId, yearMonth);
-  const overtimeHrs  = await totalOvertimeHoursForMonth(userId, yearMonth);
-
   const statusCounts = {};
+  let presentDays = 0;
   for (const r of records) {
     statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
+    if (r.status === 'PRESENT') {
+      presentDays += 1;
+    } else if (r.status === 'HALF_DAY') {
+      presentDays += 0.5;
+    }
   }
 
+  // Also count approved paid leaves
+  const paidLeaves = await db.LeaveRequest.findAll({
+    where: {
+      requesterId: userId,
+      leaveType: { [Op.ne]: 'UNPAID' },
+      status: 'APPROVED',
+      startDate: { [Op.lte]: endDate },
+      endDate:   { [Op.gte]: startDate },
+    },
+  });
+
+  let paidLeaveDays = 0;
+  for (const leave of paidLeaves) {
+    const ls = new Date(Math.max(new Date(leave.startDate), new Date(startDate)));
+    const le = new Date(Math.min(new Date(leave.endDate),   new Date(endDate)));
+    const cur = new Date(ls);
+    while (cur <= le) {
+      if (cur.getDay() !== 0) {
+        paidLeaveDays += leave.halfDayType ? 0.5 : 1;
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
+  }
+  presentDays += paidLeaveDays;
+
+  const absentDays = Math.max(0, parseFloat((workingDays - presentDays).toFixed(2)));
+  const overtimeHrs = await totalOvertimeHoursForMonth(userId, yearMonth);
+
   return {
-    userId, month: yearMonth, workingDays, absentDays, overtimeHrs, statusCounts, records,
+    userId,
+    month: yearMonth,
+    totalDays,
+    sundaysCount,
+    holidaysCount,
+    holidays,
+    workingDays,
+    presentDays: parseFloat(presentDays.toFixed(2)),
+    paidLeaveDays: parseFloat(paidLeaveDays.toFixed(2)),
+    absentDays,
+    overtimeHrs,
+    statusCounts,
+    records,
   };
 }
 
@@ -636,6 +738,7 @@ module.exports = {
   getTodayRecord,
   manualOverride,
   getMonthlySummary,
+  getWorkingDaysDetails,
   // Helpers used by salary service
   countAbsentDaysForMonth,
   totalOvertimeHoursForMonth,

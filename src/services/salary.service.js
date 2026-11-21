@@ -436,19 +436,39 @@ async function createPayrollManually({ requestingUser, data, req }) {
   // ── Auto-calculate from attendance records ──
   if (autoAttendance && resolvedBaseSalary > 0) {
     try {
-      const workingDays  = attendanceSvc.workingDaysInMonth(month);
-      const absentDays   = await attendanceSvc.countAbsentDaysForMonth(employeeId, month);
-      const overtimeHrs  = await attendanceSvc.totalOvertimeHoursForMonth(employeeId, month);
+      const workingDaysDetails = await attendanceSvc.getWorkingDaysDetails(month);
+      const workingDays = workingDaysDetails.workingDays || 24;
+      const summary = await attendanceSvc.getMonthlySummary(employeeId, month);
 
-      const dailyRate    = resolvedBaseSalary / workingDays;
-      const leaveDed     = parseFloat((dailyRate * absentDays).toFixed(2));
+      const resolvedAttended = (data.attendedDays !== undefined && data.attendedDays !== null && data.attendedDays !== '')
+        ? parseFloat(data.attendedDays)
+        : summary.presentDays;
+
+      const absentDays = Math.max(0, parseFloat((workingDays - resolvedAttended).toFixed(2)));
+      const overtimeHrs = summary.overtimeHrs || 0;
+
+      const dailyRate = workingDays > 0 ? (resolvedBaseSalary / workingDays) : 0;
+      const leaveDed = parseFloat((dailyRate * absentDays).toFixed(2));
+      const earnedBase = parseFloat((dailyRate * resolvedAttended).toFixed(2));
+
       // Overtime rate: 1.5x hourly rate (base salary / (workingDays * 8 hours))
-      const hourlyRate   = resolvedBaseSalary / (workingDays * 8);
-      const overtimeInc  = parseFloat((hourlyRate * 1.5 * overtimeHrs).toFixed(2));
+      const hourlyRate = (workingDays * 8) > 0 ? (resolvedBaseSalary / (workingDays * 8)) : 0;
+      const overtimeInc = parseFloat((hourlyRate * 1.5 * overtimeHrs).toFixed(2));
 
-      ded += leaveDed;
-      inc += overtimeInc;
-      attendanceNotes = `Auto: ${absentDays} absent days → ₹${leaveDed} deducted; ${overtimeHrs}h overtime → ₹${overtimeInc} incentive.`;
+      // If deductionAmount was passed from frontend and includes leaveDed, prevent double deduction
+      if (deductionAmount !== undefined && deductionAmount !== null && parseFloat(deductionAmount) >= leaveDed) {
+        ded = parseFloat(deductionAmount);
+      } else {
+        ded += leaveDed;
+      }
+
+      if (incentiveAmount !== undefined && incentiveAmount !== null && parseFloat(incentiveAmount) >= overtimeInc) {
+        inc = parseFloat(incentiveAmount);
+      } else {
+        inc += overtimeInc;
+      }
+
+      attendanceNotes = `Auto Attendance: ${workingDays} working days (${workingDaysDetails.totalDays} total - ${workingDaysDetails.sundaysCount} Sundays - ${workingDaysDetails.holidaysCount} Holidays). Attended: ${resolvedAttended} days, Absent: ${absentDays} days (Rate: ₹${dailyRate.toFixed(2)}/day) → ₹${leaveDed} deduction. Earned Base: ₹${earnedBase}.`;
     } catch (e) {
       // Non-fatal: fall back to manual values if attendance data is unavailable
       console.warn('[salary.service] Attendance auto-calc failed:', e.message);
@@ -520,19 +540,44 @@ async function generatePayrollForDay(dayOfMonth, systemUserId) {
       continue;
     }
 
-    const net = calcNet(cfg.baseSalary, 0, 0);
+    let inc = 0;
+    let ded = 0;
+    let autoNotes = '';
+
+    try {
+      const summary = await attendanceSvc.getMonthlySummary(cfg.userId, month);
+      const workingDays = summary.workingDays;
+      const attendedDays = summary.presentDays;
+      const absentDays = summary.absentDays;
+
+      if (workingDays > 0) {
+        const dailyRate = parseFloat(cfg.baseSalary) / workingDays;
+        const leaveDed = parseFloat((dailyRate * absentDays).toFixed(2));
+        const hourlyRate = parseFloat(cfg.baseSalary) / (workingDays * 8);
+        const overtimeInc = parseFloat((hourlyRate * 1.5 * (summary.overtimeHrs || 0)).toFixed(2));
+
+        ded = leaveDed;
+        inc = overtimeInc;
+        autoNotes = `Auto: ${workingDays} work days (${summary.totalDays} total - ${summary.sundaysCount} Sundays - ${summary.holidaysCount} Holidays). Attended: ${attendedDays}d, Absent: ${absentDays}d (Rate: ₹${dailyRate.toFixed(2)}/day) → ₹${leaveDed} ded. Overtime: ${summary.overtimeHrs || 0}h → ₹${overtimeInc} inc.`;
+      }
+    } catch (e) {
+      console.warn('[salary.service] Cron attendance auto-calc failed:', e.message);
+    }
+
+    const net = calcNet(cfg.baseSalary, inc, ded);
 
     const payroll = await db.EmployeePayroll.create({
       employeeId:     cfg.userId,
       salaryConfigId: cfg.id,
       baseSalary:     parseFloat(cfg.baseSalary),
-      incentiveAmount: 0,
-      deductionAmount: 0,
+      incentiveAmount: inc,
+      deductionAmount: ded,
       netSalary:      net,
       payrollMonth:   month,
       salaryDate:     new Date(),
       status:         'DRAFT',
       currency:       cfg.currency,
+      notes:          autoNotes || null,
       createdById:    systemUserId,
     });
 

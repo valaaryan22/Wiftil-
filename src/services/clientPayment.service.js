@@ -42,6 +42,11 @@ const PAYMENT_INCLUDE = [
     attributes: ['id', 'name', 'packageType', 'billingCycle'],
     required: false,
   },
+  {
+    model: db.ClientPayment, as: 'parentInvoice',
+    attributes: ['id', 'invoiceNumber', 'totalAmount'],
+    required: false,
+  },
 ];
 
 // For invoice → payments breakdown
@@ -633,7 +638,9 @@ async function getPaymentSummary({ clientId }) {
       paidAmount:    parseFloat(row.paidAmount   || 0),
       balanceAmount: parseFloat(row.balanceAmount || 0),
     };
-    totalInvoiced  += parseFloat(row.totalAmount  || 0);
+    if (s !== 'DRAFT' && s !== 'CANCELLED') {
+      totalInvoiced  += parseFloat(row.totalAmount  || 0);
+    }
     totalPaid      += parseFloat(row.paidAmount   || 0);
     invoiceCount   += parseInt(row.count          || 0);
     if (['SENT', 'PARTIALLY_PAID', 'OVERDUE', 'DISPUTED'].includes(s)) {
@@ -646,7 +653,13 @@ async function getPaymentSummary({ clientId }) {
 
   // ── 2. Per-package invoice breakdown ────────────────────────────────────────
   const pkgInvoiceRows = await db.ClientPayment.findAll({
-    where: { clientId, paymentType: 'INVOICE', deletedAt: null, packageId: { [Op.ne]: null } },
+    where: {
+      clientId,
+      paymentType: 'INVOICE',
+      deletedAt: null,
+      packageId: { [Op.ne]: null },
+      status: { [Op.notIn]: ['DRAFT', 'CANCELLED'] },
+    },
     attributes: [
       'packageId',
       [fn('COUNT', col('ClientPayment.id')), 'count'],

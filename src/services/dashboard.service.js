@@ -165,6 +165,25 @@ async function getDashboardSummary(userId) {
     db.Reminder.count({ where: { ...reminderWhere, remindAt: { [Op.lt]: now } } }),
   ]);
 
+  // ── Client Follow-Ups ───────────────────────────────────────────────
+  const followUpBaseWhere = {
+    deletedAt: null,
+    followUpDate: { [Op.ne]: null },
+  };
+  const followUpWhere = isManager
+    ? { ...followUpBaseWhere, followUpDone: false }
+    : { ...followUpBaseWhere, followUpDone: false, loggedById: userId };
+
+  const [followUpsTotal, followUpsOverdue] = await Promise.all([
+    db.ClientCommunicationLog.count({ where: followUpWhere }),
+    db.ClientCommunicationLog.count({
+      where: {
+        ...followUpWhere,
+        followUpDate: { [Op.lt]: today },
+      },
+    }),
+  ]);
+
   // ── Notifications ─────────────────────────────────────────────────────
   const unreadNotifications = await db.Notification.count({
     where: { userId, isRead: false },
@@ -218,6 +237,10 @@ async function getDashboardSummary(userId) {
     reminders: {
       total: remindersTotal,
       overdue: remindersOverdue,
+    },
+    followUps: {
+      total: followUpsTotal,
+      overdue: followUpsOverdue,
     },
     notifications: {
       unread: unreadNotifications,
@@ -686,6 +709,99 @@ async function getDashboardActivity(userId, { page, limit } = {}) {
   return { activity: paginated, total };
 }
 
+// ─── 10. Client Follow-Ups ──────────────────────────────────────────────────
+
+/**
+ * Client communication follow-ups where followUpDate is set.
+ */
+async function getDashboardFollowUps(userId, { page, limit, status, search, dateFrom, dateTo } = {}) {
+  const { offset, limit: lim } = paginate(page, limit);
+
+  const user = await db.User.findByPk(userId, { include: ['role'] });
+  const isManager = user?.role?.accessLevel <= 3;
+
+  const where = {
+    deletedAt: null,
+    followUpDate: { [Op.ne]: null },
+  };
+
+  if (!isManager) {
+    where[Op.or] = [
+      { loggedById: userId },
+      { '$client.account_owner_id$': userId },
+    ];
+  }
+
+  if (status === 'PENDING') {
+    where.followUpDone = false;
+  } else if (status === 'COMPLETED') {
+    where.followUpDone = true;
+  }
+
+  if (search) {
+    where[Op.or] = [
+      { title: { [Op.like]: `%${search}%` } },
+      { summary: { [Op.like]: `%${search}%` } },
+      { nextAction: { [Op.like]: `%${search}%` } },
+    ];
+  }
+
+  if (dateFrom || dateTo) {
+    where.followUpDate = {};
+    if (dateFrom) where.followUpDate[Op.gte] = dateFrom;
+    if (dateTo) where.followUpDate[Op.lte] = dateTo;
+  }
+
+  const { rows: followUps, count: total } = await db.ClientCommunicationLog.findAndCountAll({
+    where,
+    include: [
+      {
+        model: db.Client,
+        as: 'client',
+        attributes: ['id', 'name', 'clientCode'],
+      },
+      {
+        model: db.User,
+        as: 'loggedBy',
+        attributes: ['id', 'firstName', 'lastName', 'email', 'profilePicture'],
+      },
+      {
+        model: db.ClientContact,
+        as: 'contactPerson',
+        attributes: ['id', 'name', 'jobTitle', 'department', 'phone', 'email'],
+      },
+    ],
+    order: [['followUpDate', 'ASC']],
+    limit: lim,
+    offset,
+    distinct: true,
+  });
+
+  return { followUps, total };
+}
+
+/**
+ * Toggle followUpDone status on a ClientCommunicationLog
+ */
+async function toggleFollowUpDone(userId, logId, followUpDone) {
+  const log = await db.ClientCommunicationLog.findOne({
+    where: { id: logId, deletedAt: null },
+    include: [
+      { model: db.Client, as: 'client', attributes: ['id', 'name', 'clientCode'] },
+      { model: db.User, as: 'loggedBy', attributes: ['id', 'firstName', 'lastName'] },
+      { model: db.ClientContact, as: 'contactPerson', attributes: ['id', 'name'] },
+    ],
+  });
+  if (!log) {
+    const err = new Error('Follow-up not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  log.followUpDone = followUpDone !== undefined ? Boolean(followUpDone) : !log.followUpDone;
+  await log.save();
+  return log;
+}
+
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -698,4 +814,6 @@ module.exports = {
   getDashboardNotifications,
   getDashboardPerformance,
   getDashboardActivity,
+  getDashboardFollowUps,
+  toggleFollowUpDone,
 };

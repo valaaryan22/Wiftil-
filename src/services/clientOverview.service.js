@@ -277,7 +277,9 @@ async function _getBillingSummary(clientId) {
       paidAmount: parseFloat(row.paidAmount || 0),
       balanceAmount: parseFloat(row.balanceAmount || 0),
     };
-    totalInvoiced += parseFloat(row.totalAmount || 0);
+    if (s !== 'DRAFT' && s !== 'CANCELLED') {
+      totalInvoiced += parseFloat(row.totalAmount || 0);
+    }
     totalPaid += parseFloat(row.paidAmount || 0);
     invoiceCount += parseInt(row.count || 0);
     // Outstanding = balance on open invoices (SENT, PARTIALLY_PAID, OVERDUE, DISPUTED)

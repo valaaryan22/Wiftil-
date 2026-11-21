@@ -170,6 +170,37 @@ async function getActivity(req, res, next) {
   }
 }
 
+/**
+ * GET /dashboard/follow-ups
+ * Query params: page, limit, status ('PENDING'|'COMPLETED'|'ALL'), search, dateFrom, dateTo
+ */
+async function getFollowUps(req, res, next) {
+  try {
+    const { page = 1, limit = 100, status, search, dateFrom, dateTo } = req.query;
+    const { followUps, total } = await dashboardService.getDashboardFollowUps(req.user.id, {
+      page, limit, status, search, dateFrom, dateTo,
+    });
+    return paginatedResponse(res, { data: followUps, total, page, limit, message: 'Client follow-ups fetched' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PATCH /dashboard/follow-ups/:logId/toggle
+ * Toggle or set followUpDone
+ */
+async function toggleFollowUp(req, res, next) {
+  try {
+    const { logId } = req.params;
+    const { followUpDone } = req.body;
+    const updated = await dashboardService.toggleFollowUpDone(req.user.id, logId, followUpDone);
+    return successResponse(res, { data: updated, message: 'Follow-up status updated' });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   getSummary,
   getTasks,
@@ -180,4 +211,6 @@ module.exports = {
   getNotifications,
   getPerformanceFull,
   getActivity,
+  getFollowUps,
+  toggleFollowUp,
 };

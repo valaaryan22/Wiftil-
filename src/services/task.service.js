@@ -422,7 +422,7 @@ async function submitTask({ id, requestingUser, req }) {
   }
   task = directTask;
 
-  assertStatus(task, [TASK_STATUS.IN_PROGRESS], 'Task must be IN_PROGRESS to submit');
+  assertStatus(task, [TASK_STATUS.IN_PROGRESS, TASK_STATUS.REOPENED], 'Task must be IN_PROGRESS or REOPENED to submit');
 
   const pendingSubTasks = await db.SubTask.count({
     where: { taskId: id, status: { [Op.notIn]: ['TEAM_LEAD_APPROVED', 'FINAL_APPROVED'] } },
@@ -433,7 +433,6 @@ async function submitTask({ id, requestingUser, req }) {
   }
 
   await db.Task.update({ status: TASK_STATUS.SUBMITTED, submittedAt: new Date() }, { where: { id } });
-  const updated = await getFullTask(id);
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.TASK_SUBMITTED, category: AUDIT_CATEGORY.TASK,
@@ -447,6 +446,7 @@ async function submitTask({ id, requestingUser, req }) {
     });
   }
 
+  const updated = await getTaskById({ id, requestingUser });
   return updated;
 }
 
@@ -483,8 +483,7 @@ async function reopenTask({ id, requestingUser, remark, req }) {
   if (!task) notFound();
   assertStatus(task, [TASK_STATUS.REJECTED, TASK_STATUS.COMPLETED, TASK_STATUS.SUBMITTED], 'Task cannot be reopened in its current state');
 
-  await task.update({ status: TASK_STATUS.REOPENED, managerRemark: remark || null });
-  const updated = await getFullTask(id);
+  await task.update({ status: TASK_STATUS.REOPENED, managerRemark: remark || null, managerActionAt: new Date() });
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.TASK_REOPENED, category: AUDIT_CATEGORY.TASK,
@@ -492,6 +491,7 @@ async function reopenTask({ id, requestingUser, remark, req }) {
     description: `Reopened task "${task.title}"${remark ? `: "${remark}"` : ''}`, req,
   });
 
+  const updated = await getTaskById({ id, requestingUser });
   return updated;
 }
 
