@@ -11,10 +11,10 @@ const { param, query }   = require('express-validator');
 
 router.use(authenticate);
 
-// GET /audit-logs/stats — Level 4+ only
+// GET /audit-logs/stats — Level ≤ 3 (MANAGER+)
 router.get(
   '/stats',
-  authorizeLevel(4),
+  authorizeLevel(3),
   [
     query('dateFrom').optional().isISO8601().withMessage('dateFrom must be ISO date'),
     query('dateTo').optional().isISO8601().withMessage('dateTo must be ISO date'),
@@ -27,12 +27,15 @@ router.get(
 router.get(
   '/',
   [
-    query('page').optional().isInt({ min: 1 }).toInt(),
-    query('limit').optional().isInt({ min: 1, max: 200 }).toInt(),
-    query('category').optional().isIn(['USER', 'ROLE', 'LEAVE', 'AUTH', 'SYSTEM', 'GENERAL']),
-    query('status').optional().isIn(['SUCCESS', 'FAILED']),
-    query('dateFrom').optional().isISO8601(),
-    query('dateTo').optional().isISO8601(),
+    query('page').optional({ checkFalsy: true }).isInt({ min: 1 }).toInt(),
+    query('limit').optional({ checkFalsy: true }).isInt({ min: 1, max: 200 }).toInt(),
+    query('category').optional({ checkFalsy: true }).isString(), // Loosen category check or add new ones
+    query('status').optional({ checkFalsy: true }).isIn(['SUCCESS', 'FAILED']),
+    query('dateFrom').optional({ checkFalsy: true }).isISO8601(),
+    query('dateTo').optional({ checkFalsy: true }).isISO8601(),
+    query('action').optional({ checkFalsy: true }).isString(),
+    query('entity').optional({ checkFalsy: true }).isString(),
+    query('search').optional({ checkFalsy: true }).isString(),
   ],
   validate,
   auditLogController.getAuditLogs

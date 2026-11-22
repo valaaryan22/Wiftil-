@@ -38,6 +38,15 @@ function setUser(userId, user, ttlMs = DEFAULT_TTL_MS) {
 }
 
 /**
+ * Slide the TTL window for an existing cache entry (called on every cache hit).
+ * This prevents active users from being evicted while they are using the app.
+ */
+function refreshTTL(userId, ttlMs = DEFAULT_TTL_MS) {
+  const entry = store.get(userId);
+  if (entry) entry.expiresAt = Date.now() + ttlMs;
+}
+
+/**
  * Explicitly evict a user from cache.
  * Call this whenever role, status, or profile changes.
  */
@@ -69,4 +78,4 @@ const cleanupTimer = setInterval(() => {
 
 if (cleanupTimer.unref) cleanupTimer.unref();
 
-module.exports = { getUser, setUser, invalidateUser, clearAll, stats };
+module.exports = { getUser, setUser, refreshTTL, invalidateUser, clearAll, stats };

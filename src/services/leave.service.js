@@ -5,14 +5,16 @@ const { db }            = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
 const { HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
 
-function calcWorkingDays(startDate, endDate) {
+function calcWorkingDays(startDate, endDate, isHalfDay = false) {
   let count = 0;
   const cur = new Date(startDate);
   const end = new Date(endDate);
   while (cur <= end) {
-    const day = cur.getDay();
-    if (day !== 0 && day !== 6) count++;
+    count++;
     cur.setDate(cur.getDate() + 1);
+  }
+  if (isHalfDay && count === 1) {
+    return 0.5;
   }
   return count;
 }
@@ -27,7 +29,7 @@ const REVIEWER_INCLUDE = {
   attributes: ['id', 'firstName', 'lastName'],
 };
 
-async function createLeaveRequest({ requestingUser, leaveType, startDate, endDate, reason, req }) {
+async function createLeaveRequest({ requestingUser, leaveType, startDate, endDate, reason, isHalfDay, halfDayType, req }) {
   const requesterId = requestingUser.id;
 
   const overlap = await db.LeaveRequest.findOne({
@@ -43,15 +45,15 @@ async function createLeaveRequest({ requestingUser, leaveType, startDate, endDat
     err.statusCode = HTTP_STATUS.CONFLICT; throw err;
   }
 
-  const totalDays = calcWorkingDays(startDate, endDate);
-  const leave = await db.LeaveRequest.create({ requesterId, leaveType, startDate, endDate, totalDays, reason });
+  const totalDays = calcWorkingDays(startDate, endDate, isHalfDay);
+  const leave = await db.LeaveRequest.create({ requesterId, leaveType, startDate, endDate, totalDays, reason, halfDayType: isHalfDay ? halfDayType : null });
   const result = await db.LeaveRequest.findByPk(leave.id, { include: [REQUESTER_INCLUDE] });
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.LEAVE_APPLIED, category: AUDIT_CATEGORY.LEAVE,
     entity: 'LeaveRequest', entityId: leave.id, targetUserId: requesterId,
     targetUserName: `${requestingUser.firstName} ${requestingUser.lastName}`,
-    description: `${requestingUser.firstName} ${requestingUser.lastName} applied for ${leaveType} leave (${totalDays} working days)`,
+    description: `${requestingUser.firstName} ${requestingUser.lastName} applied for ${leaveType} leave (${totalDays} days)`,
     newValues: { leaveType, startDate, endDate, totalDays, reason }, req,
   });
 
@@ -63,17 +65,20 @@ async function getLeaveRequests({ requestingUser, page = 1, limit = 20, status, 
   limit = parseInt(limit);
   const where = {};
 
-  if (requestingUser.roleLevel === 1) {
+  if (requestingUser.roleLevel >= 5) {
+    // Employee (level 5+): only see their own requests
     where.requesterId = requestingUser.id;
-  } else if (requestingUser.roleLevel < 5) {
+  } else if (requestingUser.roleLevel > 1) {
+    // Mid-level: see own + subordinates with less authority (higher level number)
     const reportees = await db.User.findAll({
       where: { managerId: requestingUser.id, deletedAt: null },
       attributes: ['id'],
-      include: [{ model: db.RoleDefinition, as: 'role', where: { accessLevel: { [Op.lt]: requestingUser.roleLevel } }, attributes: [] }],
+      include: [{ model: db.RoleDefinition, as: 'role', where: { accessLevel: { [Op.gt]: requestingUser.roleLevel } }, attributes: [] }],
     });
     const ids = [requestingUser.id, ...reportees.map(r => r.id)];
     where.requesterId = { [Op.in]: ids };
   }
+  // BOSS (level 1) sees all — no filter applied
 
   if (status)    where.status    = status;
   if (leaveType) where.leaveType = leaveType;
@@ -122,8 +127,9 @@ async function reviewLeaveRequest({ leaveId, requestingUser, status, reviewComme
   if (leave.requesterId === requestingUser.id) {
     const err = new Error('Cannot review your own leave request'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
-  if (requestingUser.roleLevel <= leave.requester.role.accessLevel) {
-    const err = new Error('You are not authorized to review this leave request (insufficient access level)');
+  // Reviewer must have more authority (lower level number) than the requester
+  if (requestingUser.roleLevel >= leave.requester.role.accessLevel) {
+    const err = new Error('You are not authorized to review this leave request (insufficient authority)');
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 

@@ -4,19 +4,55 @@ const { Op }            = require('sequelize');
 const { db }            = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
 const { HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
+const apiCache          = require('../utils/apiCache');
 
 const ROLE_ATTRS = ['id', 'name', 'displayName', 'description', 'accessLevel', 'isSystem', 'isActive', 'color', 'createdAt', 'updatedAt'];
 
+// ─── Cache key ────────────────────────────────────────────────────────────────
+const CACHE_KEY_ALL   = 'roles:all';
+const CACHE_KEY_ACTIVE = 'roles:active';
+
+function roleCacheKey(includeInactive) {
+  return includeInactive ? CACHE_KEY_ALL : CACHE_KEY_ACTIVE;
+}
+
+function invalidateRoleCache() {
+  apiCache.del(CACHE_KEY_ALL);
+  apiCache.del(CACHE_KEY_ACTIVE);
+}
+
+// ─── Service Functions ────────────────────────────────────────────────────────
+
+/**
+ * getAllRoles — previously ran N separate User.count() queries (one per role).
+ * Now: single JOIN query to get all roles + user counts in ONE round-trip.
+ * Cached for 5 minutes (roles almost never change).
+ */
 async function getAllRoles({ includeInactive = false } = {}) {
-  const where = includeInactive ? {} : { isActive: true };
-  const roles = await db.RoleDefinition.findAll({
-    where,
-    attributes: ROLE_ATTRS,
-    order: [['accessLevel', 'DESC']],
+  return apiCache.getOrSet(roleCacheKey(includeInactive), apiCache.TTL.ROLES, async () => {
+    const where = includeInactive ? {} : { isActive: true };
+
+    // Single query: LEFT JOIN users, GROUP BY role → gets count in one round-trip
+    const roles = await db.RoleDefinition.findAll({
+      where,
+      attributes: [
+        ...ROLE_ATTRS,
+        // Subquery count — avoids a separate findAll + N count queries
+        [
+          db.sequelize.literal(
+            '(SELECT COUNT(*) FROM `users` WHERE `users`.`role_id` = `RoleDefinition`.`id` AND `users`.`deleted_at` IS NULL)'
+          ),
+          'userCount',
+        ],
+      ],
+      order: [['accessLevel', 'DESC']],
+    });
+
+    return roles.map(r => {
+      const json = r.toJSON();
+      return { ...json, _count: { users: parseInt(json.userCount || 0) } };
+    });
   });
-  // Attach user count
-  const counts = await Promise.all(roles.map(r => db.User.count({ where: { roleId: r.id } })));
-  return roles.map((r, i) => ({ ...r.toJSON(), _count: { users: counts[i] } }));
 }
 
 async function getRoleById(id) {
@@ -29,11 +65,18 @@ async function getRoleById(id) {
 }
 
 async function createRole({ requestingUser, name, displayName, description, accessLevel, color }) {
-  if (requestingUser.roleLevel < 5) {
-    const err = new Error('Only level-5 admins (BOSS) can create roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  // Only BOSS (level 1) or ADMIN (level 2) can create roles
+  if (requestingUser.roleLevel > 2) {
+    const err = new Error('Only BOSS or ADMIN (level ≤ 2) can create roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
-  if (accessLevel >= requestingUser.roleLevel) {
-    const err = new Error('Cannot create a role with access level equal to or higher than your own');
+  // Cannot create a role at level 1 (BOSS is always level 1)
+  if (accessLevel <= 1) {
+    const err = new Error('Access level 1 is reserved for BOSS and cannot be assigned to new roles');
+    err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  }
+  // Cannot create a role at the same or higher authority as yourself (smaller or equal number)
+  if (accessLevel <= requestingUser.roleLevel) {
+    const err = new Error(`Cannot create a role with equal or higher authority than your own (your level: ${requestingUser.roleLevel})`);
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
@@ -44,6 +87,7 @@ async function createRole({ requestingUser, name, displayName, description, acce
   }
 
   const role = await db.RoleDefinition.create({ name: normalizedName, displayName, description, accessLevel, color, isSystem: false });
+  invalidateRoleCache();
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.ROLE_CREATED, category: AUDIT_CATEGORY.ROLE,
@@ -56,8 +100,9 @@ async function createRole({ requestingUser, name, displayName, description, acce
 }
 
 async function updateRole({ requestingUser, id, displayName, description, accessLevel, color, isActive }) {
-  if (requestingUser.roleLevel < 5) {
-    const err = new Error('Only level-5 admins (BOSS) can update roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  // Only BOSS (level 1) or ADMIN (level 2) can update roles
+  if (requestingUser.roleLevel > 2) {
+    const err = new Error('Only BOSS or ADMIN (level ≤ 2) can update roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
   const existing = await db.RoleDefinition.findByPk(id, { attributes: ROLE_ATTRS });
@@ -76,6 +121,7 @@ async function updateRole({ requestingUser, id, displayName, description, access
   if (accessLevel !== undefined && !existing.isSystem) updateData.accessLevel = accessLevel;
 
   await existing.update(updateData);
+  invalidateRoleCache();
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.ROLE_UPDATED, category: AUDIT_CATEGORY.ROLE,
@@ -88,8 +134,9 @@ async function updateRole({ requestingUser, id, displayName, description, access
 }
 
 async function deleteRole({ requestingUser, id }) {
-  if (requestingUser.roleLevel < 5) {
-    const err = new Error('Only level-5 admins (BOSS) can delete roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  // Only BOSS (level 1) or ADMIN (level 2) can delete roles
+  if (requestingUser.roleLevel > 2) {
+    const err = new Error('Only BOSS or ADMIN (level ≤ 2) can delete roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
   const existing = await db.RoleDefinition.findByPk(id, { attributes: ROLE_ATTRS });
@@ -107,6 +154,7 @@ async function deleteRole({ requestingUser, id }) {
   }
 
   await existing.destroy();
+  invalidateRoleCache();
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.ROLE_DELETED, category: AUDIT_CATEGORY.ROLE,

@@ -53,11 +53,27 @@ async function getUserById(req, res, next) {
 
 async function updateUser(req, res, next) {
   try {
+    let profilePictureUrl = null;
+    if (req.file) {
+      profilePictureUrl = await uploadImage(req.file.path);
+      fs.unlink(req.file.path, (err) => {
+        if (err) console.error('Failed to delete temp file:', err);
+      });
+    }
+
+    const userData = { ...req.body };
+    if (profilePictureUrl) {
+      userData.profilePicture = profilePictureUrl;
+    }
+
     const user = await userService.updateUser({
-      id: req.params.id, requestingUser: req.user, data: req.body, req,
+      id: req.params.id, requestingUser: req.user, data: userData, req,
     });
     return successResponse(res, { message: 'User updated', data: { user } });
   } catch (err) {
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
     next(err);
   }
 }

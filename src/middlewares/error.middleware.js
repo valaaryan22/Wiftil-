@@ -18,12 +18,17 @@ function notFoundHandler(req, res) {
  */
 // eslint-disable-next-line no-unused-vars
 function errorHandler(err, req, res, next) {
-  logger.error('Unhandled error:', {
-    message: err.message,
-    stack:   process.env.NODE_ENV === 'development' ? err.stack : undefined,
-    url:     req.originalUrl,
-    method:  req.method,
-  });
+  const statusCode = err.statusCode || HTTP_STATUS.INTERNAL_SERVER_ERROR;
+
+  // Don't log expected authentication errors as "Unhandled error"
+  if (statusCode !== HTTP_STATUS.UNAUTHORIZED && err.name !== 'JsonWebTokenError' && err.name !== 'TokenExpiredError') {
+    logger.error('Unhandled error:', {
+      message: err.message,
+      stack:   process.env.NODE_ENV === 'development' ? err.stack : undefined,
+      url:     req.originalUrl,
+      method:  req.method,
+    });
+  }
 
   // Prisma known errors
   if (err.code === 'P2002') {
@@ -57,7 +62,7 @@ function errorHandler(err, req, res, next) {
     });
   }
 
-  const statusCode = err.statusCode || HTTP_STATUS.INTERNAL_SERVER_ERROR;
+
   const message    = statusCode < 500 ? err.message : 'Internal server error';
 
   return res.status(statusCode).json({ success: false, message });

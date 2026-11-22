@@ -26,8 +26,8 @@ function _validateScores(scores) {
 // separately and their 'overall' is weighted by their contribution %.
 // e.g. 2 members: 70% + 30% → overall = rawAvg × 0.7 or rawAvg × 0.3
 async function rateSubTask({ requestingUser, subTaskId, ratedUserId, quality, timeliness, communication, accuracy, ownership, comments, req }) {
-  if (requestingUser.roleLevel < RATING_MIN_LEVEL) {
-    const err = new Error('Only Managers (level 4+) can submit sub-task performance ratings');
+  if (requestingUser.roleLevel > RATING_MIN_LEVEL) {
+    const err = new Error('Only Manager level or above (level ≤ 3) can submit sub-task performance ratings');
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
@@ -112,8 +112,8 @@ async function rateSubTask({ requestingUser, subTaskId, ratedUserId, quality, ti
 // Not tied to any sub-task. Used by Boss to evaluate Managers and Team Leads
 // for a given review period (e.g. "Q2 2026", "June 2026").
 async function rateUserDirectly({ requestingUser, ratedUserId, periodLabel, quality, timeliness, communication, accuracy, ownership, comments, req }) {
-  if (requestingUser.roleLevel < 5) {
-    const err = new Error('Only Boss/Admin (level 5) can submit direct performance ratings');
+  if (requestingUser.roleLevel > 2) {
+    const err = new Error('Only BOSS or ADMIN (level ≤ 2) can submit direct performance ratings');
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
@@ -132,9 +132,10 @@ async function rateUserDirectly({ requestingUser, ratedUserId, periodLabel, qual
     const err = new Error('User not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
 
+  // Target must not be BOSS (level 1) — only Managers (level 3) or Team Leads (level 4) get direct ratings
   const targetLevel = ratedUser.role?.accessLevel;
-  if (!targetLevel || targetLevel >= 5) {
-    const err = new Error('Direct ratings can only be given to Managers (level 4) or Team Leads (level 2–3)');
+  if (!targetLevel || targetLevel <= 2) {
+    const err = new Error('Direct ratings can only be given to Managers (level 3) or Team Leads (level 4)');
     err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
   }
 
@@ -203,7 +204,8 @@ async function rateUserDirectly({ requestingUser, ratedUserId, periodLabel, qual
 async function getUserPerformance({ requestingUser, userId, page = 1, limit = 20 }) {
   page  = parseInt(page);
   limit = parseInt(limit);
-  const targetId = (requestingUser.roleLevel >= RATING_MIN_LEVEL) ? (userId || requestingUser.id) : requestingUser.id;
+  // BOSS/ADMIN can query any user's performance; others see only their own
+  const targetId = (requestingUser.roleLevel <= RATING_MIN_LEVEL) ? (userId || requestingUser.id) : requestingUser.id;
 
   const [ratings, total] = await Promise.all([
     db.PerformanceRating.findAll({

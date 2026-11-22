@@ -9,21 +9,22 @@ const { authorizeLevel } = require('../middlewares/authorize.middleware');
 router.use(authenticate);
 
 // ── SubTask CRUD ──────────────────────────────────────────────────────────────
-router.post('/',    authorizeLevel(2), ctrl.createSubTask);    // Level 2+ (Leader/Supervisor/Manager/Boss) — NOT Members
+router.post('/',    authorizeLevel(4), ctrl.createSubTask);    // Level ≤ 4 (TEAM_LEAD+) — NOT Employees
 router.get('/',     ctrl.getSubTasks);
 router.get('/:id',  ctrl.getSubTaskById);
-router.patch('/:id', authorizeLevel(2), ctrl.updateSubTask);   // Level 2+ only
-router.delete('/:id', authorizeLevel(2), ctrl.deleteSubTask);  // Level 2+ only
+router.patch('/:id', authorizeLevel(4), ctrl.updateSubTask);   // Level ≤ 4 only
+router.delete('/:id', authorizeLevel(4), ctrl.deleteSubTask);  // Level ≤ 4 only
 
 // ── Assignment & Workflow ─────────────────────────────────────────────────────
-router.post('/:id/assign',  authorizeLevel(2), ctrl.assignSubTask);   // Level 2+ → assigns Member(s)
-router.patch('/:id/start',  ctrl.startSubTask);                        // Member starts (no min level — enforced in service)
+router.post('/:id/assign',      authorizeLevel(4), ctrl.assignSubTask);       // Level ≤ 4 → assigns Member(s)
+router.post('/:id/self-assign', ctrl.selfAssignSubTask);                     // Any authenticated user can self-assign
+router.patch('/:id/start',      ctrl.startSubTask);                            // Member starts (no min level — enforced in service)
 router.post('/:id/submit',  ctrl.submitSubTask);                        // Member submits (no min level — enforced in service)
-router.post('/:id/approve', authorizeLevel(2), ctrl.approveSubTask);  // Level 2+ reviews
-router.post('/:id/reject',  authorizeLevel(2), ctrl.rejectSubTask);   // Level 2+ reviews
+router.post('/:id/approve', authorizeLevel(4), ctrl.approveSubTask);  // Level ≤ 4 reviews
+router.post('/:id/reject',  authorizeLevel(4), ctrl.rejectSubTask);   // Level ≤ 4 reviews
 
 // ── Dependencies ──────────────────────────────────────────────────────────────
-router.post('/:id/dependencies',                      authorizeLevel(2), ctrl.addDependency);     // Level 2+ adds
-router.delete('/:id/dependencies/:prerequisiteId',    authorizeLevel(2), ctrl.removeDependency);  // Level 2+ removes
+router.post('/:id/dependencies',                      authorizeLevel(4), ctrl.addDependency);     // Level ≤ 4 adds
+router.delete('/:id/dependencies/:prerequisiteId',    authorizeLevel(4), ctrl.removeDependency);  // Level ≤ 4 removes
 
 module.exports = router;

@@ -18,6 +18,8 @@ const sequelize = new Sequelize(
     dialect: config.dialect,
     logging: config.logging,
     pool:    config.pool,
+    retry:   config.retry,
+    dialectOptions: config.dialectOptions,
   }
 );
 
@@ -25,8 +27,10 @@ const sequelize = new Sequelize(
 const modelFiles = [
   require('./AuditLog.js')(sequelize, Sequelize.DataTypes),
   require('./LeaveRequest.js')(sequelize, Sequelize.DataTypes),
+  require('./LeaveAllocation.js')(sequelize, Sequelize.DataTypes),
   require('./Notification.js')(sequelize, Sequelize.DataTypes),
   require('./PerformanceRating.js')(sequelize, Sequelize.DataTypes),
+  require('./PerformanceIncrementPolicy.js')(sequelize, Sequelize.DataTypes),
   require('./RoleDefinition.js')(sequelize, Sequelize.DataTypes),
   require('./SubTask.js')(sequelize, Sequelize.DataTypes),
   require('./SubTaskAssignment.js')(sequelize, Sequelize.DataTypes),
@@ -37,6 +41,53 @@ const modelFiles = [
   require('./TaskComment.js')(sequelize, Sequelize.DataTypes),
   require('./Token.js')(sequelize, Sequelize.DataTypes),
   require('./User.js')(sequelize, Sequelize.DataTypes),
+  require('./Client.js')(sequelize, Sequelize.DataTypes),
+  require('./ClientContact.js')(sequelize, Sequelize.DataTypes),
+  require('./ClientCommunicationLog.js')(sequelize, Sequelize.DataTypes),
+  // Package / Docket / Ticket module
+  require('./ServiceCatalog.js')(sequelize, Sequelize.DataTypes),
+  require('./ClientPackage.js')(sequelize, Sequelize.DataTypes),
+  require('./PackageService.js')(sequelize, Sequelize.DataTypes),
+  require('./PackageAddOn.js')(sequelize, Sequelize.DataTypes),
+  require('./Docket.js')(sequelize, Sequelize.DataTypes),
+  require('./DocketManager.js')(sequelize, Sequelize.DataTypes),
+  require('./DocketTicket.js')(sequelize, Sequelize.DataTypes),
+  // Client Documents module
+  require('./ClientDocument.js')(sequelize, Sequelize.DataTypes),
+  // Client Payment module
+  require('./ClientPayment.js')(sequelize, Sequelize.DataTypes),
+  // Client Risk module
+  require('./ClientRisk.js')(sequelize, Sequelize.DataTypes),
+  // Date Change Requests (approval workflow for level > 3 users)
+  require('./DateChangeRequest.js')(sequelize, Sequelize.DataTypes),
+  // Finance & Accounting module
+  require('./ExpenseCategory.js')(sequelize, Sequelize.DataTypes),
+  require('./BankAccount.js')(sequelize, Sequelize.DataTypes),
+  require('./BankTransaction.js')(sequelize, Sequelize.DataTypes),
+  require('./Expense.js')(sequelize, Sequelize.DataTypes),
+  require('./InvoiceBillingConfig.js')(sequelize, Sequelize.DataTypes),
+  // Employee Salary & Payroll module
+  require('./EmployeeSalary.js')(sequelize, Sequelize.DataTypes),
+  require('./EmployeePayroll.js')(sequelize, Sequelize.DataTypes),
+  // HRM — Attendance module
+  require('./Attendance.js')(sequelize, Sequelize.DataTypes),
+  // Vendor & Collaborator Management module
+  require('./Vendor.js')(sequelize, Sequelize.DataTypes),
+  require('./VendorRateCard.js')(sequelize, Sequelize.DataTypes),
+  require('./VendorPerformance.js')(sequelize, Sequelize.DataTypes),
+  // Module X: CRM (Pre-Sales Relationship Management)
+  require('./Lead.js')(sequelize, Sequelize.DataTypes),
+  require('./Deal.js')(sequelize, Sequelize.DataTypes),
+  require('./CrmActivity.js')(sequelize, Sequelize.DataTypes),
+  require('./DealContract.js')(sequelize, Sequelize.DataTypes),
+  // Reminders module (Workbench & Calendar)
+  require('./Reminder.js')(sequelize, Sequelize.DataTypes),
+  // HRM — Holidays module
+  require('./Holiday.js')(sequelize, Sequelize.DataTypes),
+  // HRM — Office Locations & Geofencing
+  require('./OfficeLocation.js')(sequelize, Sequelize.DataTypes),
+  // Task Chains / Predefined Sub-Task Templates module
+  require('./TaskChain.js')(sequelize, Sequelize.DataTypes),
 ];
 
 modelFiles.forEach(model => {

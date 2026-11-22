@@ -63,7 +63,7 @@ async function editComment({ requestingUser, id, content }) {
   if (!comment) {
     const err = new Error('Comment not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
-  if (comment.authorId !== requestingUser.id && requestingUser.roleLevel < 5) {
+  if (comment.authorId !== requestingUser.id && requestingUser.roleLevel > 2) {
     const err = new Error('Can only edit your own comments'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
@@ -76,7 +76,7 @@ async function deleteComment({ requestingUser, id }) {
   if (!comment) {
     const err = new Error('Comment not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
-  if (comment.authorId !== requestingUser.id && requestingUser.roleLevel < 5) {
+  if (comment.authorId !== requestingUser.id && requestingUser.roleLevel > 2) {
     const err = new Error('Can only delete your own comments'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
   await comment.destroy();

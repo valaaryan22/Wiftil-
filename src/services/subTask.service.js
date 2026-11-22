@@ -3,6 +3,7 @@
 const { Op }            = require('sequelize');
 const { db }            = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
+const dateChangeRequestService = require('./dateChangeRequest.service');
 const { HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION, SUBTASK_STATUS, SUBTASK_CREATE_MIN_LEVEL } = require('../constants');
 
 // ─── Includes ─────────────────────────────────────────────────────────────────
@@ -29,7 +30,7 @@ const SUBTASK_INCLUDE = [
 ];
 
 const SUBTASK_ATTRS = [
-  'id', 'taskId', 'title', 'description', 'priority', 'status',
+  'id', 'taskId', 'docketId', 'title', 'description', 'priority', 'status',
   'startDate', 'dueDate', 'estimatedHours', 'actualHours',
   'startedAt', 'completedAt', 'submittedAt', 'reviewedAt', 'reviewComment',
   'createdById', 'reviewedById', 'createdAt', 'updatedAt',
@@ -114,10 +115,10 @@ async function _validateAgainstTask(task, { startDate, dueDate, estimatedHours }
 }
 
 function _assertIsTeamLead(user, task) {
-  // Any user with Level 2+ (Leader, Supervisor, Manager, Boss) can manage sub-tasks.
-  // Only Level 1 (Members/Employees) are blocked — enforced at route level via authorizeLevel(2).
-  if (user.roleLevel >= 2) return;
-  forbidden('Only users with Level 2 (Team Lead) or above can manage sub-tasks');
+  // Any user with Level <= 4 (TEAM_LEAD and above) can manage sub-tasks.
+  // Only Level 5+ (EMPLOYEE and below) are blocked.
+  if (user.roleLevel <= 4) return;
+  forbidden('Only users with Team Lead level or above (level ≤ 4) can manage sub-tasks');
 }
 
 async function getFullSubTask(id) {
@@ -170,8 +171,8 @@ async function getSubTasks({ requestingUser, taskId, status }) {
   const where = { taskId };
   if (status) where.status = status;
 
-  if (requestingUser.roleLevel === 1) {
-    // Member: only see sub-tasks they're assigned to
+  if (requestingUser.roleLevel >= 5) {
+    // Employee: only see sub-tasks they're assigned to
     const assignedIds = await db.SubTaskAssignment.findAll({
       where: { memberId: requestingUser.id },
       attributes: ['subTaskId'],
@@ -198,6 +199,28 @@ async function updateSubTask({ requestingUser, taskId, id, data, req }) {
   const editable = ['CREATED', 'ASSIGNED', 'LOCKED', 'AVAILABLE'];
   if (!editable.includes(subTask.status)) conflict(`Cannot edit sub-task in status "${subTask.status}"`);
 
+  // ── Date-change approval gate ────────────────────────────────────────────────
+  // Level > 2 (MANAGER and below) cannot change dates directly — route to approval flow.
+  // Only BOSS (level 1) and ADMIN (level 2) may apply dates immediately.
+  const DATE_FIELDS = ['startDate', 'dueDate'];
+  const hasDateChange = DATE_FIELDS.some(f => data[f] !== undefined);
+  let pendingDateRequest = null;
+
+  if (hasDateChange && requestingUser.roleLevel > 2) {
+    const requestedStartDate = data.startDate;
+    const requestedEndDate   = data.dueDate;
+    DATE_FIELDS.forEach(f => delete data[f]);
+
+    pendingDateRequest = await dateChangeRequestService.requestDateChange({
+      requestingUser,
+      entityType: 'SubTask',
+      entityId: id,
+      requestedStartDate,
+      requestedEndDate,
+      req,
+    });
+  }
+
   const allowed = ['title', 'description', 'priority', 'startDate', 'dueDate', 'estimatedHours'];
   const updateData = {};
   allowed.forEach(f => { if (data[f] !== undefined) updateData[f] = data[f]; });
@@ -217,7 +240,8 @@ async function updateSubTask({ requestingUser, taskId, id, data, req }) {
     description: `Updated sub-task "${subTask.title}"`, oldValues: subTask.toJSON(), newValues: updateData, req,
   });
 
-  return getFullSubTask(id);
+  const updated = await getFullSubTask(id);
+  return pendingDateRequest ? { subTask: updated, pendingDateRequest } : updated;
 }
 
 async function deleteSubTask({ requestingUser, taskId, id, req }) {
@@ -288,13 +312,65 @@ async function assignSubTask({ requestingUser, taskId, id, assignments, req }) {
 
   for (const m of members) {
     await _createNotification(m.id, {
-      type: 'SUBTASK_ASSIGNED', title: 'New Sub-Task Assigned',
+      type: 'SUBTASK_ASSIGNED', title: 'New Task Assigned',
       message: unmetDeps > 0
         ? `You have been assigned "${subTask.title}" (locked — waiting on dependencies)`
         : `You have been assigned "${subTask.title}" — ready to start!`,
       entityType: 'SubTask', entityId: id,
     });
   }
+
+  return getFullSubTask(id);
+}
+
+async function selfAssignSubTask({ requestingUser, taskId, id, req }) {
+  const task = await _getTask(taskId);
+  if (!['ACCEPTED', 'IN_PROGRESS', 'REOPENED'].includes(task.status)) {
+    conflict(`Cannot assign tasks when ticket status is "${task.status}"`);
+  }
+
+  const subTask = await db.SubTask.findOne({
+    where: { id, taskId },
+    attributes: ['id', 'title', 'status'],
+    include: [{ model: db.SubTaskAssignment, as: 'assignments', attributes: ['memberId'] }],
+  });
+  if (!subTask) notFound();
+
+  const assignable = ['CREATED', 'ASSIGNED', 'LOCKED', 'AVAILABLE', 'REOPENED', 'TEAM_LEAD_REJECTED'];
+  if (!assignable.includes(subTask.status)) {
+    conflict(`Cannot self-assign task in status "${subTask.status}"`);
+  }
+
+  const alreadyAssigned = subTask.assignments?.some(a => a.memberId === requestingUser.id);
+  if (alreadyAssigned) {
+    badReq('You are already assigned to this sub-task');
+  }
+
+  // Check dependencies
+  const unmetDeps = await _countUnmetDeps(id);
+  const newStatus = unmetDeps > 0 ? SUBTASK_STATUS.LOCKED : SUBTASK_STATUS.AVAILABLE;
+
+  // Replace assignments with self (100%)
+  await db.SubTaskAssignment.destroy({ where: { subTaskId: id } });
+  await db.SubTaskAssignment.create({
+    subTaskId: id,
+    memberId: requestingUser.id,
+    contribution: 100,
+    assignedById: requestingUser.id,
+  });
+  await subTask.update({ status: newStatus });
+
+  await writeAuditLog({
+    performedBy: requestingUser,
+    action: AUDIT_ACTION.SUBTASK_ASSIGNED,
+    category: AUDIT_CATEGORY.TASK,
+    entity: 'SubTask',
+    entityId: id,
+    entityName: subTask.title,
+    description: `User ${requestingUser.firstName} ${requestingUser.lastName} self-assigned to sub-task "${subTask.title}"`,
+    newValues: { assignments: [{ memberId: requestingUser.id, contribution: 100 }] },
+    req,
+  });
 
   return getFullSubTask(id);
 }
@@ -340,7 +416,7 @@ async function submitSubTask({ requestingUser, taskId, id, actualHours, req }) {
   });
 
   await _createNotification(subTask.createdById, {
-    type: 'SUBTASK_SUBMITTED', title: 'Sub-Task Submitted for Review',
+    type: 'SUBTASK_SUBMITTED', title: 'Task Submitted for Review',
     message: `"${subTask.title}" has been submitted for your review`, entityType: 'SubTask', entityId: id,
   });
 
@@ -389,7 +465,7 @@ async function approveSubTask({ requestingUser, taskId, id, comment, req }) {
       if (unlocked) {
         for (const a of unlocked.assignments) {
           await _createNotification(a.memberId, {
-            type: 'DEPENDENCY_UNLOCKED', title: 'Sub-Task Unlocked!',
+            type: 'DEPENDENCY_UNLOCKED', title: 'Task Unlocked!',
             message: `"${unlocked.title}" is now available to start`, entityType: 'SubTask', entityId: link.subTaskId,
           });
         }
@@ -411,8 +487,8 @@ async function approveSubTask({ requestingUser, taskId, id, comment, req }) {
 
   for (const a of subTask.assignments) {
     await _createNotification(a.memberId, {
-      type: 'SUBTASK_APPROVED', title: 'Sub-Task Approved!',
-      message: `Your sub-task "${subTask.title}" has been approved`, entityType: 'SubTask', entityId: id,
+      type: 'SUBTASK_APPROVED', title: 'Task Approved!',
+      message: `Your task "${subTask.title}" has been approved`, entityType: 'SubTask', entityId: id,
     });
   }
 
@@ -445,7 +521,7 @@ async function rejectSubTask({ requestingUser, taskId, id, comment, req }) {
 
   for (const a of subTask.assignments) {
     await _createNotification(a.memberId, {
-      type: 'SUBTASK_REJECTED', title: 'Sub-Task Needs Rework',
+      type: 'SUBTASK_REJECTED', title: 'Task Needs Rework',
       message: `"${subTask.title}" was rejected: "${comment}"`, entityType: 'SubTask', entityId: id,
     });
   }
@@ -506,10 +582,17 @@ async function removeDependency({ requestingUser, taskId, id, prerequisiteId, re
     );
   }
 
+  const [subTask, prereq] = await Promise.all([
+    db.SubTask.findByPk(id, { attributes: ['id', 'title'] }),
+    db.SubTask.findByPk(prerequisiteId, { attributes: ['id', 'title'] }),
+  ]);
+  const subTaskTitle = subTask?.title || 'SubTask';
+  const prereqTitle = prereq?.title || 'prerequisite';
+
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.DEPENDENCY_REMOVED, category: AUDIT_CATEGORY.TASK,
-    entity: 'SubTask', entityId: id,
-    description: `Removed dependency from prerequisite ${prerequisiteId}`, req,
+    entity: 'SubTask', entityId: id, entityName: subTaskTitle,
+    description: `Removed dependency: "${subTaskTitle}" no longer depends on "${prereqTitle}"`, req,
   });
 
   return getFullSubTask(id);
@@ -524,10 +607,24 @@ async function _getMemberSubTask(id, taskId, user) {
     include: [{ model: db.SubTaskAssignment, as: 'assignments', attributes: ['memberId'] }],
   });
   if (!subTask) notFound();
-  if (user.roleLevel < 5) {
+  if (user.roleLevel > 1) {
+    // Not BOSS: verify assignment
     const subTaskJson = subTask.toJSON ? subTask.toJSON() : subTask;
-    const isAssigned = subTaskJson.assignments.some(a => a.memberId === user.id);
-    if (!isAssigned) forbidden('Not assigned to this sub-task');
+    const isAssigned = subTaskJson.assignments && subTaskJson.assignments.some(a => a.memberId === user.id);
+    if (!isAssigned) {
+      // If task is currently unassigned and in startable status, auto-assign to user on start
+      if ((!subTaskJson.assignments || subTaskJson.assignments.length === 0) &&
+          ['AVAILABLE', 'ASSIGNED', 'REOPENED', 'TEAM_LEAD_REJECTED'].includes(subTask.status)) {
+        await db.SubTaskAssignment.create({
+          subTaskId: id,
+          memberId: user.id,
+          contribution: 100,
+          assignedById: user.id,
+        });
+        return subTask;
+      }
+      forbidden('Not assigned to this sub-task');
+    }
   }
   return subTask;
 }
@@ -565,7 +662,7 @@ async function _hasCycle(startId, newPrereqId) {
 
 module.exports = {
   createSubTask, getSubTasks, getSubTaskById, updateSubTask, deleteSubTask,
-  assignSubTask, startSubTask, submitSubTask,
+  assignSubTask, selfAssignSubTask, startSubTask, submitSubTask,
   approveSubTask, rejectSubTask,
   addDependency, removeDependency,
 };

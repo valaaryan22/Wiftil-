@@ -1,33 +1,82 @@
 'use strict';
 
+/**
+ * Access Level System — Lower number = HIGHER authority.
+ *
+ *   Level 1  →  BOSS        (top authority, level never changes)
+ *   Level 2  →  ADMIN
+ *   Level 3  →  MANAGER
+ *   Level 4  →  TEAM_LEAD
+ *   Level 5  →  EMPLOYEE
+ *   Level 6+ →  any future custom roles added below Employee
+ *
+ * New roles can be added at any level > 1 without touching BOSS.
+ * Comparisons: roleLevel <= threshold means "at least that rank or higher".
+ */
+
 const SYSTEM_ROLE_NAMES = Object.freeze({
-  BOSS:       'BOSS',
-  MANAGER:    'MANAGER',
-  SUPERVISOR: 'SUPERVISOR',
-  LEADER:     'LEADER',
-  EMPLOYEE:   'EMPLOYEE',
+  BOSS:      'BOSS',
+  ADMIN:     'ADMIN',
+  MANAGER:   'MANAGER',
+  TEAM_LEAD: 'TEAM_LEAD',
+  EMPLOYEE:  'EMPLOYEE',
 });
 
-const ACCESS_LEVEL = Object.freeze({
-  BOSS:       5,
-  MANAGER:    4,
-  SUPERVISOR: 3,
-  LEADER:     2,
-  EMPLOYEE:   1,
-});
+// ─── Permission thresholds (roleLevel <= X means the user has at least that rank) ─
+// BOSS_LEVEL is the absolute top — always 1 and never changes.
+const BOSS_LEVEL = 1;
 
-// ─── Permission thresholds ────────────────────────────────────────────────────
-const LEAVE_APPROVAL_MIN_LEVEL = 2;
-const USER_INVITE_MIN_LEVEL    = 4;
-const ROLE_MANAGE_MIN_LEVEL    = 5;
-const USER_DELETE_MIN_LEVEL    = 5;
-const USER_STATUS_MIN_LEVEL    = 4;
+const LEAVE_APPROVAL_MAX_LEVEL  = 4; // Level ≤ 4 (TEAM_LEAD+) can approve leave
+const USER_INVITE_MAX_LEVEL     = 3; // Level ≤ 3 (MANAGER+) can invite users
+const ROLE_MANAGE_MAX_LEVEL     = 2; // Level ≤ 2 (ADMIN+)   can manage roles
+const USER_DELETE_MAX_LEVEL     = 2; // Level ≤ 2 (ADMIN+)   can delete users
+const USER_STATUS_MAX_LEVEL     = 3; // Level ≤ 3 (MANAGER+) can toggle user status
 
 // Task permission levels
-const TASK_CREATE_MIN_LEVEL    = 5; // Only BOSS/Admin creates main tasks
-const TASK_MANAGE_MIN_LEVEL    = 3; // Manager/Supervisor accepts/assigns/approves
-const SUBTASK_CREATE_MIN_LEVEL = 2; // Team Lead (level 2+) creates sub-tasks
-const RATING_MIN_LEVEL         = 4; // Manager rates performance
+const TASK_CREATE_MAX_LEVEL     = 2; // Level ≤ 2 (ADMIN/BOSS) creates main tasks
+const TASK_MANAGE_MAX_LEVEL     = 3; // Level ≤ 3 (MANAGER+) accepts/assigns/approves
+const SUBTASK_CREATE_MAX_LEVEL  = 4; // Level ≤ 4 (TEAM_LEAD+) creates sub-tasks
+const RATING_MAX_LEVEL          = 3; // Level ≤ 3 (MANAGER+) rates performance
+
+// Client permissions
+const CLIENT_MANAGE_MAX_LEVEL   = 3; // Level ≤ 3 (MANAGER+) can create/update/delete clients
+
+// Package / Docket / Ticket permissions
+const PACKAGE_MANAGE_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can manage packages, dockets, add-ons
+const DOCKET_MANAGE_MAX_LEVEL   = 4; // Level ≤ 4 (TEAM_LEAD+) can be assigned as docket managers
+
+// Payment collection permissions
+const PAYMENT_MANAGE_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can create invoices, approve payments, cancel
+const ADDON_APPROVE_MAX_LEVEL   = 3; // Level ≤ 3 (MANAGER+) can approve/reject add-ons
+
+// Finance module permissions
+const FINANCE_MANAGE_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can access the finance module
+const INVOICE_REVIEW_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can review/approve invoices
+const EXPENSE_MANAGE_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can manage & approve expenses
+const BANK_MANAGE_MAX_LEVEL     = 2; // Level ≤ 2 (ADMIN+)   can manage bank accounts
+const BILLING_CONFIG_MAX_LEVEL  = 3; // Level ≤ 3 (MANAGER+) can configure client billing
+
+// Salary & Payroll module permissions
+const SALARY_MANAGE_MAX_LEVEL   = 2; // Level ≤ 2 (ADMIN+) can set employee salaries
+const PAYROLL_VIEW_MAX_LEVEL    = 3; // Level ≤ 3 (MANAGER+) can view & approve payroll
+
+// Vendor & Workforce Hub permissions
+const VENDOR_MANAGE_MAX_LEVEL   = 3; // Level ≤ 3 (MANAGER+) can manage vendors & external workforce
+
+// CRM & Pre-Sales Relationship Management permissions
+const CRM_MANAGE_MAX_LEVEL      = 3; // Level ≤ 3 (MANAGER+) can manage CRM leads, deals, follow-ups, contracts
+
+// ─── Legacy aliases (kept so old call-sites compile without mass-rename) ─────────
+// These point to the same constants under the old names.
+const LEAVE_APPROVAL_MIN_LEVEL  = LEAVE_APPROVAL_MAX_LEVEL;
+const USER_INVITE_MIN_LEVEL     = USER_INVITE_MAX_LEVEL;
+const ROLE_MANAGE_MIN_LEVEL     = ROLE_MANAGE_MAX_LEVEL;
+const USER_DELETE_MIN_LEVEL     = USER_DELETE_MAX_LEVEL;
+const USER_STATUS_MIN_LEVEL     = USER_STATUS_MAX_LEVEL;
+const TASK_CREATE_MIN_LEVEL     = TASK_CREATE_MAX_LEVEL;
+const TASK_MANAGE_MIN_LEVEL     = TASK_MANAGE_MAX_LEVEL;
+const SUBTASK_CREATE_MIN_LEVEL  = SUBTASK_CREATE_MAX_LEVEL;
+const RATING_MIN_LEVEL          = RATING_MAX_LEVEL;
 
 const TOKEN_TYPES = Object.freeze({
   REFRESH:        'REFRESH',
@@ -86,6 +135,27 @@ const SUBTASK_STATUS = Object.freeze({
   REOPENED:             'REOPENED',
 });
 
+const DOCKET_STATUS = Object.freeze({
+  DRAFT:      'DRAFT',
+  PUBLISHED:  'PUBLISHED',
+  ACTIVE:     'ACTIVE',
+  ON_HOLD:    'ON_HOLD',
+  COMPLETED:  'COMPLETED',
+  CANCELLED:  'CANCELLED',
+});
+
+const DATE_CHANGE_STATUS = Object.freeze({
+  PENDING:  'PENDING',
+  APPROVED: 'APPROVED',
+  REJECTED: 'REJECTED',
+});
+
+const DOCKET_MANAGER_ROLE = Object.freeze({
+  PRIMARY:   'PRIMARY',
+  SECONDARY: 'SECONDARY',
+  REVIEWER:  'REVIEWER',
+});
+
 const HTTP_STATUS = Object.freeze({
   OK:                    200,
   CREATED:               201,
@@ -101,12 +171,23 @@ const HTTP_STATUS = Object.freeze({
 });
 
 const AUDIT_CATEGORY = Object.freeze({
-  USER:   'USER',
-  ROLE:   'ROLE',
-  LEAVE:  'LEAVE',
-  AUTH:   'AUTH',
-  TASK:   'TASK',
-  SYSTEM: 'SYSTEM',
+  USER:    'USER',
+  ROLE:    'ROLE',
+  LEAVE:   'LEAVE',
+  AUTH:    'AUTH',
+  TASK:    'TASK',
+  CLIENT:  'CLIENT',
+  SYSTEM:  'SYSTEM',
+  PACKAGE: 'PACKAGE',
+  DOCKET:  'DOCKET',
+  TICKET:  'TICKET',
+  ADDON:   'ADDON',
+  SERVICE: 'SERVICE',
+  PAYMENT: 'PAYMENT',
+  SALARY:  'SALARY',
+  ATTENDANCE: 'ATTENDANCE',
+  VENDOR:  'VENDOR',
+  CRM:     'CRM',
 });
 
 const AUDIT_ACTION = Object.freeze({
@@ -165,11 +246,159 @@ const AUDIT_ACTION = Object.freeze({
   COMMENT_ADDED:         'COMMENT_ADDED',
   COMMENT_UPDATED:       'COMMENT_UPDATED',
   COMMENT_DELETED:       'COMMENT_DELETED',
+  // Clients
+  CLIENT_CREATED:        'CLIENT_CREATED',
+  CLIENT_UPDATED:        'CLIENT_UPDATED',
+  CLIENT_DELETED:        'CLIENT_DELETED',
+  // Client Contacts
+  CLIENT_CONTACT_CREATED: 'CLIENT_CONTACT_CREATED',
+  CLIENT_CONTACT_UPDATED: 'CLIENT_CONTACT_UPDATED',
+  CLIENT_CONTACT_DELETED: 'CLIENT_CONTACT_DELETED',
+  // Client Communication Logs
+  CLIENT_COMM_LOGGED:    'CLIENT_COMM_LOGGED',
+  CLIENT_COMM_UPDATED:   'CLIENT_COMM_UPDATED',
+  CLIENT_COMM_DELETED:   'CLIENT_COMM_DELETED',
+  // Service Catalog
+  SERVICE_CREATED:       'SERVICE_CREATED',
+  SERVICE_UPDATED:       'SERVICE_UPDATED',
+  SERVICE_DELETED:       'SERVICE_DELETED',
+  // Client Packages
+  PACKAGE_CREATED:       'PACKAGE_CREATED',
+  PACKAGE_UPDATED:       'PACKAGE_UPDATED',
+  PACKAGE_DELETED:       'PACKAGE_DELETED',
+  PACKAGE_SERVICE_ADDED: 'PACKAGE_SERVICE_ADDED',
+  PACKAGE_SERVICE_UPDATED: 'PACKAGE_SERVICE_UPDATED',
+  PACKAGE_SERVICE_REMOVED: 'PACKAGE_SERVICE_REMOVED',
+  // Add-ons
+  ADDON_REQUESTED:       'ADDON_REQUESTED',
+  ADDON_APPROVED:        'ADDON_APPROVED',
+  ADDON_REJECTED:        'ADDON_REJECTED',
+  ADDON_DELIVERED:       'ADDON_DELIVERED',
+  ADDON_BILLED:          'ADDON_BILLED',
+  ADDON_DELETED:         'ADDON_DELETED',
+  // Dockets
+  DOCKET_CREATED:        'DOCKET_CREATED',
+  DOCKET_UPDATED:        'DOCKET_UPDATED',
+  DOCKET_DELETED:        'DOCKET_DELETED',
+  DOCKET_PUBLISHED:      'DOCKET_PUBLISHED',
+  DOCKET_MANAGER_ADDED:  'DOCKET_MANAGER_ADDED',
+  DOCKET_MANAGER_REMOVED:'DOCKET_MANAGER_REMOVED',
+  DOCKET_TASK_LINKED:    'DOCKET_TASK_LINKED',
+  DOCKET_TASK_UNLINKED:  'DOCKET_TASK_UNLINKED',
+  // Date Change Requests
+  DATE_CHANGE_REQUESTED: 'DATE_CHANGE_REQUESTED',
+  DATE_CHANGE_APPROVED:  'DATE_CHANGE_APPROVED',
+  DATE_CHANGE_REJECTED:  'DATE_CHANGE_REJECTED',
+  // Docket Tickets
+  TICKET_CREATED:        'TICKET_CREATED',
+  TICKET_UPDATED:        'TICKET_UPDATED',
+  TICKET_DELETED:        'TICKET_DELETED',
+  TICKET_RESOLVED:       'TICKET_RESOLVED',
+  TICKET_CLOSED:         'TICKET_CLOSED',
+  // Payments
+  PAYMENT_INVOICE_CREATED: 'PAYMENT_INVOICE_CREATED',
+  PAYMENT_INVOICE_SENT:    'PAYMENT_INVOICE_SENT',
+  PAYMENT_INVOICE_REVIEWED:'PAYMENT_INVOICE_REVIEWED',
+  PAYMENT_INVOICE_APPROVED:'PAYMENT_INVOICE_APPROVED',
+  PAYMENT_INVOICE_REJECTED:'PAYMENT_INVOICE_REJECTED',
+  PAYMENT_RECEIVED:        'PAYMENT_RECEIVED',
+  PAYMENT_ADVANCE_RECORDED:'PAYMENT_ADVANCE_RECORDED',
+  PAYMENT_CREDIT_NOTE:     'PAYMENT_CREDIT_NOTE',
+  PAYMENT_APPROVED:        'PAYMENT_APPROVED',
+  PAYMENT_OVERDUE:         'PAYMENT_OVERDUE',
+  PAYMENT_DISPUTED:        'PAYMENT_DISPUTED',
+  PAYMENT_DISPUTE_RESOLVED:'PAYMENT_DISPUTE_RESOLVED',
+  PAYMENT_CANCELLED:       'PAYMENT_CANCELLED',
+  PAYMENT_WRITTEN_OFF:     'PAYMENT_WRITTEN_OFF',
+  PAYMENT_FOLLOW_UP:       'PAYMENT_FOLLOW_UP',
+  PAYMENT_UPDATED:         'PAYMENT_UPDATED',
+  PAYMENT_DELETED:         'PAYMENT_DELETED',
+  // Expenses
+  EXPENSE_CREATED:         'EXPENSE_CREATED',
+  EXPENSE_UPDATED:         'EXPENSE_UPDATED',
+  EXPENSE_SUBMITTED:       'EXPENSE_SUBMITTED',
+  EXPENSE_APPROVED:        'EXPENSE_APPROVED',
+  EXPENSE_REJECTED:        'EXPENSE_REJECTED',
+  EXPENSE_DELETED:         'EXPENSE_DELETED',
+  // Banking & Cashbook
+  BANK_ACCOUNT_CREATED:    'BANK_ACCOUNT_CREATED',
+  BANK_ACCOUNT_UPDATED:    'BANK_ACCOUNT_UPDATED',
+  BANK_ACCOUNT_DELETED:    'BANK_ACCOUNT_DELETED',
+  BANK_TRANSACTION_ADDED:  'BANK_TRANSACTION_ADDED',
+  BANK_TRANSACTION_UPDATED:'BANK_TRANSACTION_UPDATED',
+  BANK_RECONCILED:         'BANK_RECONCILED',
+  // Billing Config
+  BILLING_CONFIG_CREATED:  'BILLING_CONFIG_CREATED',
+  BILLING_CONFIG_UPDATED:  'BILLING_CONFIG_UPDATED',
+  INVOICE_AUTO_GENERATED:  'INVOICE_AUTO_GENERATED',
+  // Salary & Payroll
+  SALARY_CONFIG_CREATED:      'SALARY_CONFIG_CREATED',
+  SALARY_CONFIG_UPDATED:      'SALARY_CONFIG_UPDATED',
+  PAYROLL_GENERATED:          'PAYROLL_GENERATED',
+  PAYROLL_CREATED_MANUAL:     'PAYROLL_CREATED_MANUAL',
+  PAYROLL_APPROVED:           'PAYROLL_APPROVED',
+  PAYROLL_PAID:               'PAYROLL_PAID',
+  PAYROLL_CANCELLED:          'PAYROLL_CANCELLED',
+  PAYROLL_INCENTIVE_ADDED:    'PAYROLL_INCENTIVE_ADDED',
+  // HRM — Attendance
+  ATTENDANCE_PUNCH_IN:        'ATTENDANCE_PUNCH_IN',
+  ATTENDANCE_PUNCH_OUT:       'ATTENDANCE_PUNCH_OUT',
+  ATTENDANCE_OVERRIDE:        'ATTENDANCE_OVERRIDE',
+  // Vendor & Workforce Hub
+  VENDOR_CREATED:             'VENDOR_CREATED',
+  VENDOR_UPDATED:             'VENDOR_UPDATED',
+  VENDOR_DELETED:             'VENDOR_DELETED',
+  VENDOR_RATE_CARD_CREATED:   'VENDOR_RATE_CARD_CREATED',
+  VENDOR_RATE_CARD_UPDATED:   'VENDOR_RATE_CARD_UPDATED',
+  VENDOR_RATE_CARD_DELETED:   'VENDOR_RATE_CARD_DELETED',
+  VENDOR_PERFORMANCE_RECORDED:'VENDOR_PERFORMANCE_RECORDED',
+  VENDOR_PERFORMANCE_DELETED: 'VENDOR_PERFORMANCE_DELETED',
+  // CRM & Pre-Sales
+  CRM_LEAD_CREATED:           'CRM_LEAD_CREATED',
+  CRM_LEAD_UPDATED:           'CRM_LEAD_UPDATED',
+  CRM_LEAD_DELETED:           'CRM_LEAD_DELETED',
+  CRM_LEAD_CONVERTED:         'CRM_LEAD_CONVERTED',
+  CRM_DEAL_CREATED:           'CRM_DEAL_CREATED',
+  CRM_DEAL_UPDATED:           'CRM_DEAL_UPDATED',
+  CRM_DEAL_DELETED:           'CRM_DEAL_DELETED',
+  CRM_DEAL_STAGE_CHANGED:     'CRM_DEAL_STAGE_CHANGED',
+  CRM_ACTIVITY_CREATED:       'CRM_ACTIVITY_CREATED',
+  CRM_ACTIVITY_UPDATED:       'CRM_ACTIVITY_UPDATED',
+  CRM_ACTIVITY_COMPLETED:     'CRM_ACTIVITY_COMPLETED',
+  CRM_ACTIVITY_DELETED:       'CRM_ACTIVITY_DELETED',
+  CRM_CONTRACT_CREATED:       'CRM_CONTRACT_CREATED',
+  CRM_CONTRACT_UPDATED:       'CRM_CONTRACT_UPDATED',
+  CRM_CONTRACT_DELETED:       'CRM_CONTRACT_DELETED',
 });
 
 module.exports = {
   SYSTEM_ROLE_NAMES,
-  ACCESS_LEVEL,
+  BOSS_LEVEL,
+  // New-style threshold names
+  LEAVE_APPROVAL_MAX_LEVEL,
+  USER_INVITE_MAX_LEVEL,
+  ROLE_MANAGE_MAX_LEVEL,
+  USER_DELETE_MAX_LEVEL,
+  USER_STATUS_MAX_LEVEL,
+  TASK_CREATE_MAX_LEVEL,
+  TASK_MANAGE_MAX_LEVEL,
+  SUBTASK_CREATE_MAX_LEVEL,
+  RATING_MAX_LEVEL,
+  CLIENT_MANAGE_MAX_LEVEL,
+  PACKAGE_MANAGE_MAX_LEVEL,
+  DOCKET_MANAGE_MAX_LEVEL,
+  PAYMENT_MANAGE_MAX_LEVEL,
+  ADDON_APPROVE_MAX_LEVEL,
+  FINANCE_MANAGE_MAX_LEVEL,
+  INVOICE_REVIEW_MAX_LEVEL,
+  EXPENSE_MANAGE_MAX_LEVEL,
+  BANK_MANAGE_MAX_LEVEL,
+  BILLING_CONFIG_MAX_LEVEL,
+  SALARY_MANAGE_MAX_LEVEL,
+  PAYROLL_VIEW_MAX_LEVEL,
+  VENDOR_MANAGE_MAX_LEVEL,
+  CRM_MANAGE_MAX_LEVEL,
+  // Legacy aliases (backward-compat)
   LEAVE_APPROVAL_MIN_LEVEL,
   USER_INVITE_MIN_LEVEL,
   ROLE_MANAGE_MIN_LEVEL,
@@ -185,6 +414,9 @@ module.exports = {
   TASK_PRIORITY,
   TASK_STATUS,
   SUBTASK_STATUS,
+  DOCKET_STATUS,
+  DATE_CHANGE_STATUS,
+  DOCKET_MANAGER_ROLE,
   HTTP_STATUS,
   AUDIT_CATEGORY,
   AUDIT_ACTION,

@@ -23,10 +23,10 @@ router.get(
   roleController.getRoleById
 );
 
-// POST /roles — BOSS only (level 5)
+// POST /roles — BOSS/ADMIN only (level <= 2)
 router.post(
   '/',
-  authorizeLevel(5),
+  authorizeLevel(2),
   [
     body('name')
       .trim().notEmpty().withMessage('Role name is required')
@@ -36,7 +36,7 @@ router.post(
       .isLength({ max: 80 }),
     body('description').optional().trim().isLength({ max: 500 }),
     body('accessLevel')
-      .isInt({ min: 1, max: 4 }).withMessage('Access level must be 1–4 (5 is reserved for BOSS)')
+      .isInt({ min: 2 }).withMessage('Access level must be >= 2 (level 1 is reserved for BOSS)')
       .toInt(),
     body('color').optional().matches(/^#[0-9A-Fa-f]{6}$/).withMessage('Color must be a valid hex code e.g. #ff6b6b'),
   ],
@@ -44,15 +44,15 @@ router.post(
   roleController.createRole
 );
 
-// PATCH /roles/:id — BOSS only (level 5)
+// PATCH /roles/:id — BOSS/ADMIN only (level <= 2)
 router.patch(
   '/:id',
-  authorizeLevel(5),
+  authorizeLevel(2),
   [
     param('id').isUUID().withMessage('Valid role ID required'),
     body('displayName').optional().trim().isLength({ max: 80 }),
     body('description').optional().trim().isLength({ max: 500 }),
-    body('accessLevel').optional().isInt({ min: 1, max: 4 }).toInt(),
+    body('accessLevel').optional().isInt({ min: 2 }).withMessage('Access level must be >= 2 (1 is reserved for BOSS)').toInt(),
     body('color').optional().matches(/^#[0-9A-Fa-f]{6}$/).withMessage('Invalid hex color'),
     body('isActive').optional().isBoolean().toBoolean(),
   ],
@@ -60,10 +60,10 @@ router.patch(
   roleController.updateRole
 );
 
-// DELETE /roles/:id — BOSS only (level 5)
+// DELETE /roles/:id — BOSS/ADMIN only (level <= 2)
 router.delete(
   '/:id',
-  authorizeLevel(5),
+  authorizeLevel(2),
   [param('id').isUUID().withMessage('Valid role ID required')],
   validate,
   roleController.deleteRole

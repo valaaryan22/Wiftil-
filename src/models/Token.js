@@ -15,7 +15,7 @@ module.exports = (sequelize, DataTypes) => {
       references: { model: 'users', key: 'id' },
     },
     token: {
-      type: DataTypes.STRING(512),
+      type: DataTypes.STRING(768),
       allowNull: false,
       unique: true,
     },
@@ -63,7 +63,7 @@ module.exports = (sequelize, DataTypes) => {
     updatedAt: 'updated_at',
     indexes: [
       { fields: ['user_id'] },
-      { fields: ['token'] },
+      { fields: ['token'], unique: true },
     ],
   });
 

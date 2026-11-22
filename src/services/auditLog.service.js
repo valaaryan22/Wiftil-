@@ -18,9 +18,11 @@ async function getAuditLogs({ requestingUser, page = 1, limit = 50, action, cate
 
   const where = {};
 
-  if (requestingUser.roleLevel < 4) {
+  if (requestingUser.roleLevel > 3) {
+    // Employee/TeamLead: can only see their own logs
     where.performedById = requestingUser.id;
-  } else if (requestingUser.roleLevel === 4) {
+  } else if (requestingUser.roleLevel === 3) {
+    // Manager: see own + subordinate logs
     const subordinates = await db.User.findAll({
       where: { managerId: requestingUser.id, deletedAt: null },
       attributes: ['id'],
@@ -31,13 +33,14 @@ async function getAuditLogs({ requestingUser, page = 1, limit = 50, action, cate
       { targetUserId:  { [Op.in]: ids } },
     ];
   }
+  // BOSS/ADMIN (level <= 2): see all logs
 
   if (action)   where.action   = { [Op.like]: `%${action}%` };
   if (category) where.category = category;
   if (entity)   where.entity   = entity;
   if (status)   where.status   = status;
-  if (performedById && requestingUser.roleLevel >= 4) where.performedById = performedById;
-  if (targetUserId  && requestingUser.roleLevel >= 4) where.targetUserId  = targetUserId;
+  if (performedById && requestingUser.roleLevel <= 3) where.performedById = performedById;
+  if (targetUserId  && requestingUser.roleLevel <= 3) where.targetUserId  = targetUserId;
 
   if (dateFrom || dateTo) {
     where.createdAt = {};
@@ -80,15 +83,15 @@ async function getAuditLogById({ id, requestingUser }) {
   if (!log) {
     const err = new Error('Audit log not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
-  if (requestingUser.roleLevel < 4 && log.performedById !== requestingUser.id) {
+  if (requestingUser.roleLevel > 3 && log.performedById !== requestingUser.id) {
     const err = new Error('Access denied'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
   return log;
 }
 
 async function getAuditStats({ requestingUser, dateFrom, dateTo }) {
-  if (requestingUser.roleLevel < 4) {
-    const err = new Error('Level 4+ required to view audit statistics'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  if (requestingUser.roleLevel > 3) {
+    const err = new Error('Manager level or above (level ≤ 3) required to view audit statistics'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
   const where = {};

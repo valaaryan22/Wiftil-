@@ -6,6 +6,7 @@ const { generateAccessToken, generateRefreshToken, verifyRefreshToken, getRefres
 const { writeAuditLog } = require('../utils/auditLog');
 const { TOKEN_TYPES, HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
 const userCache         = require('../utils/userCache');
+const logger            = require('../utils/logger');
 
 const INCLUDE_ROLE = { model: db.RoleDefinition, as: 'role', attributes: ['id', 'name', 'displayName', 'accessLevel'] };
 
@@ -57,6 +58,11 @@ async function login({ email, password, req }) {
   const user = await db.User.findOne({
     where: { email, deletedAt: null },
     include: [INCLUDE_ROLE],
+    attributes: [
+      'id', 'email', 'password', 'firstName', 'lastName', 'isActive', 'isEmailVerified',
+      'department', 'jobTitle', 'managerId', 'profilePicture',
+      'canAccessFinance', 'canAccessSalary', 'canAccessBanking',
+    ],
   });
 
   if (!user) {
@@ -78,15 +84,31 @@ async function login({ email, password, req }) {
     throw err;
   }
 
+  const isFinanceUser = Boolean(user.canAccessFinance || (user.department && user.department.toLowerCase().includes('finance')));
   const tokenPayload = {
-    sub:       user.id,
-    email:     user.email,
-    roleName:  user.role.name,
-    roleLevel: user.role.accessLevel,
+    sub:              user.id,
+    email:            user.email,
+    firstName:        user.firstName,
+    lastName:         user.lastName,
+    isActive:         user.isActive,
+    isEmailVerified:  user.isEmailVerified,
+    department:       user.department      || null,
+    jobTitle:         user.jobTitle        || null,
+    managerId:        user.managerId       || null,
+    profilePicture:   user.profilePicture  || null,
+    roleId:           user.role.id,
+    roleName:         user.role.name,
+    roleLevel:        user.role.accessLevel,
+    roleDisplay:      user.role.displayName,
+    roleColor:        user.role.color      || null,
+    // Module permission flags
+    canAccessFinance: isFinanceUser,
+    canAccessSalary:  Boolean(user.canAccessSalary || isFinanceUser),
+    canAccessBanking: Boolean(user.canAccessBanking || isFinanceUser),
   };
 
   const accessToken  = generateAccessToken(tokenPayload);
-  const refreshToken = generateRefreshToken(tokenPayload);
+  const refreshToken = generateRefreshToken({ sub: user.id });
 
   await db.Token.create({
     userId:     user.id,
@@ -148,6 +170,13 @@ async function refreshTokens({ refreshToken, req }) {
   });
 
   if (!storedToken || storedToken.isRevoked || storedToken.expiresAt < new Date()) {
+    logger.error('Refresh token validation failed', {
+      tokenFound: !!storedToken,
+      isRevoked: storedToken ? storedToken.isRevoked : null,
+      expiresAt: storedToken ? storedToken.expiresAt : null,
+      currentTime: new Date(),
+      isExpired: storedToken ? storedToken.expiresAt < new Date() : null,
+    });
     const err = new Error('Refresh token is invalid or has been revoked');
     err.statusCode = HTTP_STATUS.UNAUTHORIZED;
     throw err;
@@ -160,7 +189,28 @@ async function refreshTokens({ refreshToken, req }) {
   }
 
   const { user } = storedToken;
-  const tokenPayload = { sub: user.id, email: user.email, roleName: user.role.name, roleLevel: user.role.accessLevel };
+  const isFinanceUser = Boolean(user.canAccessFinance || (user.department && user.department.toLowerCase().includes('finance')));
+  const tokenPayload = {
+    sub:              user.id,
+    email:            user.email,
+    firstName:        user.firstName,
+    lastName:         user.lastName,
+    isActive:         user.isActive,
+    isEmailVerified:  user.isEmailVerified,
+    department:       user.department      || null,
+    jobTitle:         user.jobTitle        || null,
+    managerId:        user.managerId       || null,
+    profilePicture:   user.profilePicture  || null,
+    roleId:           user.role.id,
+    roleName:         user.role.name,
+    roleLevel:        user.role.accessLevel,
+    roleDisplay:      user.role.displayName,
+    roleColor:        user.role.color      || null,
+    // Module permission flags
+    canAccessFinance: isFinanceUser,
+    canAccessSalary:  Boolean(user.canAccessSalary || isFinanceUser),
+    canAccessBanking: Boolean(user.canAccessBanking || isFinanceUser),
+  };
   const newAccessToken = generateAccessToken(tokenPayload);
 
   // ── Reuse vs Rotate decision ──────────────────────────────────────────
@@ -175,7 +225,7 @@ async function refreshTokens({ refreshToken, req }) {
   if (shouldRotate) {
     // Revoke old token and issue a fresh one
     await storedToken.update({ isRevoked: true });
-    outRefreshToken = generateRefreshToken(tokenPayload);
+    outRefreshToken = generateRefreshToken({ sub: user.id });
     await db.Token.create({
       userId:     user.id,
       token:      outRefreshToken,
@@ -205,9 +255,13 @@ async function logout({ refreshToken, userId }) {
     { isRevoked: true },
     { where: { token: refreshToken, userId, isRevoked: false } }
   );
+  const user = await db.User.findByPk(userId, { attributes: ['id', 'firstName', 'lastName'] });
+  const userName = user ? `${user.firstName} ${user.lastName}`.trim() : null;
   await writeAuditLog({
+    performedById: userId, performedByName: userName,
     action: AUDIT_ACTION.USER_LOGGED_OUT, category: AUDIT_CATEGORY.AUTH,
-    entity: 'User', entityId: userId, description: 'User logged out',
+    entity: 'User', entityId: userId, entityName: userName,
+    description: userName ? `User "${userName}" logged out` : 'User logged out',
   });
 }
 
@@ -219,9 +273,13 @@ async function logoutAll({ userId }) {
     { isRevoked: true },
     { where: { userId, isRevoked: false, type: TOKEN_TYPES.REFRESH } }
   );
+  const user = await db.User.findByPk(userId, { attributes: ['id', 'firstName', 'lastName'] });
+  const userName = user ? `${user.firstName} ${user.lastName}`.trim() : null;
   await writeAuditLog({
+    performedById: userId, performedByName: userName,
     action: AUDIT_ACTION.USER_LOGGED_OUT_ALL, category: AUDIT_CATEGORY.AUTH,
-    entity: 'User', entityId: userId, description: 'User logged out of all devices',
+    entity: 'User', entityId: userId, entityName: userName,
+    description: userName ? `User "${userName}" logged out of all devices` : 'User logged out of all devices',
   });
 }
 
@@ -247,11 +305,46 @@ async function changePassword({ userId, currentPassword, newPassword }) {
     { where: { userId, isRevoked: false } }
   );
 
+  const userName = `${user.firstName} ${user.lastName}`.trim();
   await writeAuditLog({
+    performedById: userId, performedByName: userName,
     action: AUDIT_ACTION.PASSWORD_CHANGED, category: AUDIT_CATEGORY.AUTH,
-    entity: 'User', entityId: userId,
-    description: 'Password changed — all sessions invalidated',
+    entity: 'User', entityId: userId, entityName: userName,
+    description: `Password changed for "${userName}" — all sessions invalidated`,
   });
 }
 
-module.exports = { register, login, refreshTokens, logout, logoutAll, changePassword };
+/**
+ * Get current profile with latest DB permissions and role details
+ */
+async function getMe(userId) {
+  const user = await db.User.findByPk(userId, {
+    attributes: [
+      'id', 'email', 'firstName', 'lastName', 'phone', 'department', 'jobTitle',
+      'isActive', 'isEmailVerified', 'profilePicture', 'managerId',
+      'canAccessFinance', 'canAccessSalary', 'canAccessBanking',
+    ],
+    include: [{
+      model: db.RoleDefinition,
+      as: 'role',
+      attributes: ['id', 'name', 'displayName', 'accessLevel', 'color'],
+    }],
+  });
+  if (!user) return null;
+  const userJson = user.toJSON();
+  const isFinanceUser = Boolean(userJson.canAccessFinance || (userJson.department && userJson.department.toLowerCase().includes('finance')));
+  userJson.canAccessFinance = isFinanceUser;
+  if (isFinanceUser) {
+    userJson.canAccessSalary = true;
+    userJson.canAccessBanking = true;
+  }
+  if (user.role) {
+    userJson.roleLevel = user.role.accessLevel;
+    userJson.roleName = user.role.name;
+    userJson.roleDisplay = user.role.displayName;
+    userJson.roleColor = user.role.color;
+  }
+  return userJson;
+}
+
+module.exports = { register, login, refreshTokens, logout, logoutAll, changePassword, getMe };

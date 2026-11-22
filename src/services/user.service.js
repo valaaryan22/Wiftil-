@@ -11,7 +11,8 @@ const ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12');
 const INCLUDE_ROLE = { model: db.RoleDefinition, as: 'role', attributes: ['id', 'name', 'displayName', 'accessLevel', 'color'] };
 
 const USER_ATTRS = ['id', 'email', 'firstName', 'lastName', 'isActive', 'isEmailVerified',
-  'department', 'jobTitle', 'phone', 'managerId', 'profilePicture', 'createdAt', 'updatedAt'];
+  'department', 'jobTitle', 'phone', 'managerId', 'profilePicture',
+  'canAccessFinance', 'canAccessSalary', 'canAccessBanking', 'createdAt', 'updatedAt'];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -27,18 +28,26 @@ function formatUser(user) {
   const u = user.toJSON ? user.toJSON() : { ...user };
   delete u.password;
   delete u.deletedAt;
+  const isFinance = Boolean(u.canAccessFinance || (u.department && String(u.department).toLowerCase().includes('finance')));
+  u.canAccessFinance = isFinance;
+  if (isFinance) {
+    u.canAccessSalary = true;
+    u.canAccessBanking = true;
+  }
   return u;
 }
 
 // ─── Services ─────────────────────────────────────────────────────────────────
 
 async function inviteUser({ requestingUser, data, req }) {
-  if (requestingUser.roleLevel < 4) {
-    const err = new Error('Only Level-4+ users (Manager and above) can add new users');
+  // Level <= 3 (MANAGER and above) can invite users
+  if (requestingUser.roleLevel > 3) {
+    const err = new Error('Only Manager level and above (level ≤ 3) can add new users');
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
-  const { email, password, firstName, lastName, roleId: rawRole, department, jobTitle, phone, managerId, profilePicture } = data;
+  const { email, password, firstName, lastName, roleId: rawRole, department, jobTitle, phone, managerId, profilePicture,
+    canAccessFinance, canAccessSalary, canAccessBanking } = data;
 
   const existing = await db.User.findOne({ where: { email } });
   if (existing) {
@@ -52,17 +61,27 @@ async function inviteUser({ requestingUser, data, req }) {
     err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
   }
 
-  if (targetRole.accessLevel >= requestingUser.roleLevel) {
-    const err = new Error(`You can only assign roles below your own level (${requestingUser.roleLevel})`);
+  // Cannot assign a role with equal or higher authority (lower or equal number)
+  if (targetRole.accessLevel <= requestingUser.roleLevel) {
+    const err = new Error(`You can only assign roles with lower authority than your own (your level: ${requestingUser.roleLevel})`);
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
+
+  // Level 1 (BOSS) auto-grants all permissions
+  const isBoss = requestingUser.roleLevel === 1;
+  const isFinanceDept = Boolean(department && String(department).toLowerCase().includes('finance'));
+  const finalDept = (!department || String(department).trim() === '') && (canAccessFinance === true || isBoss) ? 'Finance' : department;
+  const grantFinance = canAccessFinance === true || isBoss || isFinanceDept;
 
   const user = await db.User.create({
     email,
     password: password || `Wiftil@${Math.random().toString(36).slice(2, 10)}!`,
     firstName, lastName, roleId: targetRole.id,
-    department, jobTitle, phone, managerId, isEmailVerified: false,
+    department: finalDept, jobTitle, phone, managerId, isEmailVerified: false,
     profilePicture,
+    canAccessFinance: grantFinance,
+    canAccessSalary:  canAccessSalary  === true || isBoss || grantFinance,
+    canAccessBanking: canAccessBanking === true || isBoss || grantFinance,
   });
 
   const created = await db.User.findByPk(user.id, { attributes: USER_ATTRS, include: [INCLUDE_ROLE] });
@@ -87,11 +106,14 @@ async function getAllUsers({ requestingUser, page = 1, limit = 20, roleId, depar
   const userWhere = { deletedAt: null };
   const roleWhere = {};
 
-  if (requestingUser.roleLevel < 5) {
-    if (requestingUser.roleLevel === 1) {
+  // BOSS (level 1) can see all users; level 1 employees can only see themselves
+  if (requestingUser.roleLevel > 1) {
+    if (requestingUser.roleLevel >= 5) {
+      // Employee: only see themselves
       userWhere.id = requestingUser.id;
     } else {
-      roleWhere.accessLevel = { [Op.lt]: requestingUser.roleLevel };
+      // Others: only see users with less authority (higher level number)
+      roleWhere.accessLevel = { [Op.gt]: requestingUser.roleLevel };
     }
   }
 
@@ -129,7 +151,8 @@ async function getUserById({ id, requestingUser }) {
   }
 
   const isSelf  = requestingUser.id === id;
-  const canView = isSelf || requestingUser.roleLevel > user.role.accessLevel;
+  // Can view if self, or if requester has higher authority (lower level number)
+  const canView = isSelf || requestingUser.roleLevel < user.role.accessLevel;
   if (!canView) {
     const err = new Error('Access denied'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
@@ -144,7 +167,7 @@ async function updateUser({ id, requestingUser, data, req }) {
   }
 
   const isSelf   = requestingUser.id === id;
-  const isHigher = requestingUser.roleLevel > target.role.accessLevel;
+  const isHigher = requestingUser.roleLevel < target.role.accessLevel;
   if (!isSelf && !isHigher) {
     const err = new Error('Access denied'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
@@ -153,10 +176,37 @@ async function updateUser({ id, requestingUser, data, req }) {
   const updateData = {};
   allowedFields.forEach((f) => { if (data[f] !== undefined) updateData[f] = data[f]; });
 
+  // Permission flags can only be set by higher-authority users or Admin/Boss (level <= 2)
+  if (!isSelf && (requestingUser.roleLevel <= 2 || isHigher)) {
+    if (data.canAccessFinance !== undefined) {
+      const grantFinance = data.canAccessFinance === true || data.canAccessFinance === 'true';
+      updateData.canAccessFinance = grantFinance;
+      // If granted finance access and user has no department, assign to 'Finance' department
+      if (grantFinance && (!updateData.department || String(updateData.department).trim() === '') && !target.department) {
+        updateData.department = 'Finance';
+      }
+    }
+    // If department was changed to Finance, auto-grant finance permissions
+    if (updateData.department && String(updateData.department).toLowerCase().includes('finance')) {
+      updateData.canAccessFinance = true;
+      updateData.canAccessSalary  = true;
+      updateData.canAccessBanking = true;
+    }
+    if (data.canAccessSalary  !== undefined) updateData.canAccessSalary  = data.canAccessSalary  === true || data.canAccessSalary === 'true';
+    if (data.canAccessBanking !== undefined) updateData.canAccessBanking = data.canAccessBanking === true || data.canAccessBanking === 'true';
+  } else if (updateData.department && String(updateData.department).toLowerCase().includes('finance')) {
+    // Even if self or not setting permissions directly, assigning to Finance department grants finance access
+    updateData.canAccessFinance = true;
+    updateData.canAccessSalary  = true;
+    updateData.canAccessBanking = true;
+  }
+
   await target.update(updateData);
   userCache.invalidateUser(id);
 
   const updated = await db.User.findByPk(id, { attributes: USER_ATTRS, include: [INCLUDE_ROLE] });
+  const formattedUpdated = formatUser(updated);
+  userCache.setUser(id, formattedUpdated);
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.USER_UPDATED, category: AUDIT_CATEGORY.USER,
@@ -170,8 +220,9 @@ async function updateUser({ id, requestingUser, data, req }) {
 }
 
 async function updateUserRole({ id, requestingUser, roleId: rawRole, req }) {
-  if (requestingUser.roleLevel < 4) {
-    const err = new Error('Level 4+ required to change user roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  // Level <= 3 (MANAGER+) required to change user roles
+  if (requestingUser.roleLevel > 3) {
+    const err = new Error('Manager level or above (level ≤ 3) required to change user roles'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
   if (id === requestingUser.id) {
     const err = new Error('Cannot change your own role'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
@@ -181,8 +232,9 @@ async function updateUserRole({ id, requestingUser, roleId: rawRole, req }) {
   if (!targetRole) {
     const err = new Error('Invalid role specified'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
   }
-  if (targetRole.accessLevel >= requestingUser.roleLevel) {
-    const err = new Error(`You cannot assign a role at or above your own level (${requestingUser.roleLevel})`);
+  // Cannot assign a role with equal or higher authority
+  if (targetRole.accessLevel <= requestingUser.roleLevel) {
+    const err = new Error(`You cannot assign a role with equal or higher authority than your own (your level: ${requestingUser.roleLevel})`);
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
@@ -190,8 +242,9 @@ async function updateUserRole({ id, requestingUser, roleId: rawRole, req }) {
   if (!target) {
     const err = new Error('User not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
-  if (target.role.accessLevel >= requestingUser.roleLevel) {
-    const err = new Error('Access denied — target user has equal or higher access level');
+  // Target user must have less authority (higher level number) than requester
+  if (target.role.accessLevel <= requestingUser.roleLevel) {
+    const err = new Error('Access denied — target user has equal or higher authority');
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
@@ -213,8 +266,9 @@ async function updateUserRole({ id, requestingUser, roleId: rawRole, req }) {
 }
 
 async function toggleUserStatus({ id, requestingUser, isActive, req }) {
-  if (requestingUser.roleLevel < 4) {
-    const err = new Error('Level 4+ required to activate/deactivate users'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  // Level <= 3 (MANAGER+) required to activate/deactivate users
+  if (requestingUser.roleLevel > 3) {
+    const err = new Error('Manager level or above (level ≤ 3) required to activate/deactivate users'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
   if (id === requestingUser.id) {
     const err = new Error('Cannot change your own status'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
@@ -224,8 +278,9 @@ async function toggleUserStatus({ id, requestingUser, isActive, req }) {
   if (!target) {
     const err = new Error('User not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
   }
-  if (requestingUser.roleLevel <= target.role.accessLevel) {
-    const err = new Error('Access denied — cannot change status of user with equal or higher access level');
+  // Requester must have more authority (lower level number) than the target
+  if (requestingUser.roleLevel >= target.role.accessLevel) {
+    const err = new Error('Access denied — cannot change status of user with equal or higher authority');
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
@@ -247,8 +302,9 @@ async function toggleUserStatus({ id, requestingUser, isActive, req }) {
 }
 
 async function deleteUser({ id, requestingUser, req }) {
-  if (requestingUser.roleLevel < 5) {
-    const err = new Error('Only Level-5 (BOSS) can delete users'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
+  // Level <= 2 (ADMIN/BOSS) can delete users
+  if (requestingUser.roleLevel > 2) {
+    const err = new Error('Only BOSS or ADMIN (level ≤ 2) can delete users'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
   if (id === requestingUser.id) {
     const err = new Error('Cannot delete yourself'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;

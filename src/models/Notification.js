@@ -4,6 +4,7 @@
 //                   | TASK_APPROVED | TASK_REOPENED | TASK_DUE_SOON | TASK_OVERDUE
 //                   | SUBTASK_ASSIGNED | SUBTASK_SUBMITTED | SUBTASK_APPROVED
 //                   | SUBTASK_REJECTED | DEPENDENCY_UNLOCKED | RATING_SUBMITTED | MENTION
+//                   | DATE_CHANGE_REQUESTED | DATE_CHANGE_APPROVED | DATE_CHANGE_REJECTED
 module.exports = (sequelize, DataTypes) => {
   const Notification = sequelize.define('Notification', {
     id: {
@@ -22,7 +23,8 @@ module.exports = (sequelize, DataTypes) => {
         'TASK_ASSIGNED', 'TASK_ACCEPTED', 'TASK_REJECTED', 'TASK_SUBMITTED',
         'TASK_APPROVED', 'TASK_REOPENED', 'TASK_DUE_SOON', 'TASK_OVERDUE',
         'SUBTASK_ASSIGNED', 'SUBTASK_SUBMITTED', 'SUBTASK_APPROVED',
-        'SUBTASK_REJECTED', 'DEPENDENCY_UNLOCKED', 'RATING_SUBMITTED', 'MENTION'
+        'SUBTASK_REJECTED', 'DEPENDENCY_UNLOCKED', 'RATING_SUBMITTED', 'MENTION',
+        'DATE_CHANGE_REQUESTED', 'DATE_CHANGE_APPROVED', 'DATE_CHANGE_REJECTED'
       ),
       allowNull: false,
     },

@@ -71,6 +71,27 @@ module.exports = (sequelize, DataTypes) => {
       field: 'manager_id',
       references: { model: 'users', key: 'id' },
     },
+    // ── Module permission flags ──────────────────────────────────────────────
+    // Level 1 (BOSS) always has full access regardless of these flags.
+    // For all other levels, these flags explicitly grant access.
+    canAccessFinance: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'can_access_finance',
+    },
+    canAccessSalary: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'can_access_salary',
+    },
+    canAccessBanking: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'can_access_banking',
+    },
     deletedAt: {
       type: DataTypes.DATE,
       allowNull: true,
@@ -143,6 +164,14 @@ module.exports = (sequelize, DataTypes) => {
       foreignKey: 'reviewer_id',
       as: 'reviewedLeaves',
     });
+    User.hasMany(models.LeaveAllocation, {
+      foreignKey: 'user_id',
+      as: 'leaveAllocations',
+    });
+    User.hasMany(models.LeaveAllocation, {
+      foreignKey: 'allocated_by_id',
+      as: 'allocationsGiven',
+    });
     User.hasMany(models.AuditLog, {
       foreignKey: 'performed_by_id',
       as: 'auditLogs',
@@ -202,6 +231,26 @@ module.exports = (sequelize, DataTypes) => {
     User.hasMany(models.Notification, {
       foreignKey: 'user_id',
       as: 'notifications',
+    });
+    User.hasMany(models.DocketManager, {
+      foreignKey: 'manager_id',
+      as: 'docketManagements',
+    });
+    User.hasMany(models.DocketManager, {
+      foreignKey: 'assigned_by_id',
+      as: 'docketManagerAssignedBy',
+    });
+    User.hasMany(models.Docket, {
+      foreignKey: 'published_by_id',
+      as: 'publishedDockets',
+    });
+    User.hasMany(models.Attendance, {
+      foreignKey: 'user_id',
+      as: 'attendanceRecords',
+    });
+    User.hasMany(models.Attendance, {
+      foreignKey: 'marked_by_id',
+      as: 'markedAttendances',
     });
   };
 

@@ -3,9 +3,11 @@
 const { Op, fn, col, literal } = require('sequelize');
 const { db }            = require('../database/client');
 const { writeAuditLog } = require('../utils/auditLog');
+const dateChangeRequestService = require('./dateChangeRequest.service');
 const {
   HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION,
   TASK_STATUS, TASK_CREATE_MIN_LEVEL, TASK_MANAGE_MIN_LEVEL,
+  SUBTASK_CREATE_MIN_LEVEL
 } = require('../constants');
 
 // ─── Includes ─────────────────────────────────────────────────────────────────
@@ -22,19 +24,25 @@ const TASK_INCLUDE = [
     model: db.TaskAssignment, as: 'assignments',
     include: [USER_SNAP_INCLUDE('teamLead'), { model: db.User, as: 'assignedBy', attributes: ['id', 'firstName', 'lastName'] }],
   },
+  {
+    model: db.Docket, as: 'docket',
+    attributes: ['id', 'docketCode', 'title', 'docketType', 'status'],
+    required: false,
+  },
 ];
 
 const TASK_ATTRS = [
   'id', 'title', 'description', 'priority', 'status',
   'startDate', 'dueDate', 'estimatedHours', 'actualHours', 'completionPercent',
   'managerRemark', 'managerActionAt', 'submittedAt', 'approvedAt', 'completedAt',
-  'createdById', 'managerId', 'createdAt', 'updatedAt',
+  'createdById', 'managerId', 'docketId', 'createdAt', 'updatedAt',
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function assertLevel(user, min, msg) {
-  if (user.roleLevel < min) {
-    const err = new Error(msg || `Minimum access level ${min} required`);
+function assertLevel(user, maxLevel, msg) {
+  // Lower number = more authority. User passes if their level <= maxLevel.
+  if (user.roleLevel > maxLevel) {
+    const err = new Error(msg || `Access level ≤ ${maxLevel} required`);
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 }
@@ -69,8 +77,23 @@ async function _createNotifications(userIds, { type, title, message, entityType,
 
 // ─── Service Functions ────────────────────────────────────────────────────────
 
-async function createTask({ requestingUser, title, description, priority, startDate, dueDate, estimatedHours, managerId, req }) {
-  assertLevel(requestingUser, TASK_CREATE_MIN_LEVEL, 'Only Admin (level 5) can create main tasks');
+async function createTask({ requestingUser, title, description, priority, startDate, dueDate, estimatedHours, managerId, docketId, req }) {
+  assertLevel(requestingUser, TASK_CREATE_MIN_LEVEL, 'Only BOSS or ADMIN (level ≤ 2) can create main tasks');
+
+  // ── Validate docketId if provided ──────────────────────────────────────────
+  if (docketId) {
+    const docket = await db.Docket.findOne({
+      where: { id: docketId, deletedAt: null },
+      attributes: ['id', 'status'],
+    });
+    if (!docket) {
+      const err = new Error('Docket not found'); err.statusCode = HTTP_STATUS.NOT_FOUND; throw err;
+    }
+    if (['CANCELLED', 'COMPLETED'].includes(docket.status)) {
+      const err = new Error(`Cannot create tasks under a docket with status "${docket.status}"`);
+      err.statusCode = HTTP_STATUS.CONFLICT; throw err;
+    }
+  }
 
   if (managerId) {
     const mgr = await db.User.findOne({
@@ -79,8 +102,8 @@ async function createTask({ requestingUser, title, description, priority, startD
       include: [{ model: db.RoleDefinition, as: 'role', attributes: ['accessLevel'] }],
     });
     if (!mgr) notFound('Assigned manager not found');
-    if (mgr.role.accessLevel < TASK_MANAGE_MIN_LEVEL) {
-      const err = new Error('Assigned user must be level 3+'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
+    if (mgr.role.accessLevel > TASK_MANAGE_MIN_LEVEL) {
+      const err = new Error('Assigned user must be Manager level or above (level ≤ 3)'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
     }
   }
 
@@ -91,36 +114,41 @@ async function createTask({ requestingUser, title, description, priority, startD
     estimatedHours: estimatedHours ? parseFloat(estimatedHours) : null,
     createdById: requestingUser.id,
     managerId:   managerId || null,
+    docketId:    docketId  || null,
     status: managerId ? TASK_STATUS.ASSIGNED : TASK_STATUS.CREATED,
   });
 
   const created = await getFullTask(task.id);
+  const docketName = created?.docket?.title || null;
+  const managerName = created?.manager ? `${created.manager.firstName} ${created.manager.lastName}`.trim() : null;
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.TASK_CREATED, category: AUDIT_CATEGORY.TASK,
     entity: 'Task', entityId: task.id, entityName: task.title,
-    description: `Admin created task "${task.title}"${managerId ? ` and assigned to manager` : ''}`,
-    newValues: { title, priority, dueDate, managerId }, req,
+    targetUserId: managerId || null,
+    targetUserName: managerName || null,
+    description: `Admin created task "${task.title}"${docketName ? ` under docket "${docketName}"` : ''}${managerName ? ` and assigned to manager "${managerName}"` : ''}`,
+    newValues: { title, priority, dueDate, managerId, docketId }, req,
   });
 
   if (managerId) {
     await _createNotifications([managerId], {
-      type: 'TASK_ASSIGNED', title: 'New Task Assigned',
-      message: `You have been assigned a new task: "${task.title}"`, entityType: 'Task', entityId: task.id,
+      type: 'TASK_ASSIGNED', title: 'New Ticket Assigned',
+      message: `You have been assigned a new ticket: "${task.title}"`, entityType: 'Task', entityId: task.id,
     });
   }
 
   return created;
 }
 
-async function getTasks({ requestingUser, page = 1, limit = 20, status, priority, search }) {
+async function getTasks({ requestingUser, page = 1, limit = 20, status, priority, search, docketId }) {
   page  = parseInt(page);
   limit = parseInt(limit);
 
   const where = { deletedAt: null };
 
-  if (requestingUser.roleLevel > 3) {
-    // Can see all tasks
+  if (requestingUser.roleLevel <= 3) {
+    // BOSS/ADMIN/MANAGER can see all tasks
   } else {
     const taskIds = await _getAccessibleTaskIds(requestingUser);
     where.id = { [Op.in]: taskIds };
@@ -128,6 +156,7 @@ async function getTasks({ requestingUser, page = 1, limit = 20, status, priority
 
   if (status)   where.status   = status;
   if (priority) where.priority = priority;
+  if (docketId) where.docketId = docketId;  // ← filter by docket
   if (search) {
     where[Op.or] = [
       { title:       { [Op.like]: `%${search}%` } },
@@ -158,9 +187,13 @@ async function getTaskById({ id, requestingUser }) {
         model: db.SubTask, as: 'subTasks',
         include: [
           USER_SNAP_INCLUDE('createdBy'),
+          USER_SNAP_INCLUDE('reviewedBy'),
           {
             model: db.SubTaskAssignment, as: 'assignments',
-            include: [USER_SNAP_INCLUDE('member')],
+            include: [
+              USER_SNAP_INCLUDE('member'),
+              { model: db.User, as: 'assignedBy', attributes: ['id', 'firstName', 'lastName'] },
+            ],
           },
           {
             model: db.SubTaskDependency, as: 'dependencies',
@@ -174,6 +207,24 @@ async function getTaskById({ id, requestingUser }) {
 
   if (!task) notFound();
   _assertCanViewTask(requestingUser, task);
+
+  // Fetch chronological audit history for this ticket
+  try {
+    const auditLogs = await db.AuditLog.findAll({
+      where: {
+        [Op.or]: [
+          { entityId: id },
+          { entity: 'Task', entityId: id },
+        ],
+      },
+      attributes: ['id', 'action', 'category', 'performedByName', 'performedByRole', 'targetUserName', 'description', 'createdAt'],
+      order: [['createdAt', 'ASC']],
+    });
+    task.setDataValue('auditLogs', auditLogs);
+  } catch (err) {
+    task.setDataValue('auditLogs', []);
+  }
+
   return task;
 }
 
@@ -182,6 +233,28 @@ async function updateTask({ id, requestingUser, data, req }) {
 
   const task = await db.Task.findOne({ where: { id, deletedAt: null }, attributes: ['id', 'title', 'status'] });
   if (!task) notFound();
+
+  // ── Date-change approval gate ────────────────────────────────────────────────
+  // Level > 2 (MANAGER and below) cannot change dates directly — route to approval flow.
+  // Only BOSS (level 1) and ADMIN (level 2) may apply dates immediately.
+  const DATE_FIELDS = ['startDate', 'dueDate'];
+  const hasDateChange = DATE_FIELDS.some(f => data[f] !== undefined);
+  let pendingDateRequest = null;
+
+  if (hasDateChange && requestingUser.roleLevel > 2) {
+    const requestedStartDate = data.startDate;
+    const requestedEndDate   = data.dueDate;   // stored as requestedEndDate in DCR
+    DATE_FIELDS.forEach(f => delete data[f]);
+
+    pendingDateRequest = await dateChangeRequestService.requestDateChange({
+      requestingUser,
+      entityType: 'Task',
+      entityId: id,
+      requestedStartDate,
+      requestedEndDate,
+      req,
+    });
+  }
 
   const allowed = ['title', 'description', 'priority', 'startDate', 'dueDate', 'estimatedHours'];
   const updateData = {};
@@ -196,7 +269,7 @@ async function updateTask({ id, requestingUser, data, req }) {
     description: `Updated task "${task.title}"`, oldValues: task.toJSON(), newValues: updateData, req,
   });
 
-  return updated;
+  return pendingDateRequest ? { task: updated, pendingDateRequest } : updated;
 }
 
 async function assignManager({ id, requestingUser, managerId, req }) {
@@ -212,8 +285,8 @@ async function assignManager({ id, requestingUser, managerId, req }) {
 
   if (!task) notFound();
   if (!mgr)  notFound('Manager not found');
-  if (mgr.role.accessLevel < TASK_MANAGE_MIN_LEVEL) {
-    const err = new Error('Assigned user must be level 3+'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
+  if (mgr.role.accessLevel > TASK_MANAGE_MIN_LEVEL) {
+    const err = new Error('Assigned user must be Manager level or above (level ≤ 3)'); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
   }
 
   await task.update({ managerId, status: TASK_STATUS.ASSIGNED });
@@ -227,8 +300,8 @@ async function assignManager({ id, requestingUser, managerId, req }) {
   });
 
   await _createNotifications([managerId], {
-    type: 'TASK_ASSIGNED', title: 'New Task Assigned',
-    message: `You have been assigned task: "${task.title}"`, entityType: 'Task', entityId: id,
+    type: 'TASK_ASSIGNED', title: 'New Ticket Assigned',
+    message: `You have been assigned ticket: "${task.title}"`, entityType: 'Task', entityId: id,
   });
 
   return updated;
@@ -250,8 +323,8 @@ async function acceptTask({ id, requestingUser, remark, req }) {
     description: `Manager accepted task "${task.title}"${remark ? `: "${remark}"` : ''}`, req,
   });
   await _createNotifications([task.createdById], {
-    type: 'TASK_ACCEPTED', title: 'Task Accepted',
-    message: `Your task "${task.title}" was accepted by the manager`, entityType: 'Task', entityId: id,
+    type: 'TASK_ACCEPTED', title: 'Ticket Accepted',
+    message: `Your ticket "${task.title}" was accepted by the manager`, entityType: 'Task', entityId: id,
   });
 
   return updated;
@@ -277,8 +350,8 @@ async function rejectTask({ id, requestingUser, remark, req }) {
     description: `Manager rejected task "${task.title}": "${remark}"`, req,
   });
   await _createNotifications([task.createdById], {
-    type: 'TASK_REJECTED', title: 'Task Rejected',
-    message: `Your task "${task.title}" was rejected: "${remark}"`, entityType: 'Task', entityId: id,
+    type: 'TASK_REJECTED', title: 'Ticket Rejected',
+    message: `Your ticket "${task.title}" was rejected: "${remark}"`, entityType: 'Task', entityId: id,
   });
 
   return updated;
@@ -299,9 +372,9 @@ async function assignTeamLeads({ id, requestingUser, teamLeadIds, req }) {
   });
 
   if (leads.length !== teamLeadIds.length) notFound('One or more Team Leads not found');
-  const invalidLead = leads.find(l => l.role.accessLevel < 2);
+  const invalidLead = leads.find(l => l.role.accessLevel > SUBTASK_CREATE_MIN_LEVEL);
   if (invalidLead) {
-    const err = new Error(`User "${invalidLead.firstName}" does not have Team Lead level`); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
+    const err = new Error(`User "${invalidLead.firstName}" does not have Team Lead level or above`); err.statusCode = HTTP_STATUS.BAD_REQUEST; throw err;
   }
 
   // Upsert assignments
@@ -322,8 +395,8 @@ async function assignTeamLeads({ id, requestingUser, teamLeadIds, req }) {
     newValues: { teamLeadIds }, req,
   });
   await _createNotifications(teamLeadIds, {
-    type: 'TASK_ASSIGNED', title: 'Task Assigned to You',
-    message: `You have been assigned task: "${task.title}"`, entityType: 'Task', entityId: id,
+    type: 'TASK_ASSIGNED', title: 'Ticket Assigned to You',
+    message: `You have been assigned ticket: "${task.title}"`, entityType: 'Task', entityId: id,
   });
 
   return updated;
@@ -341,7 +414,7 @@ async function submitTask({ id, requestingUser, req }) {
 
   const isCreator    = directTask.createdById === requestingUser.id;
   const isAssignedTL = directTask.assignments?.some(a => a.teamLeadId === requestingUser.id);
-  const isHighLevel  = requestingUser.roleLevel >= 5; // Admin/Boss can always submit
+  const isHighLevel  = requestingUser.roleLevel <= 2; // BOSS/ADMIN can always submit
 
   if (!isCreator && !isAssignedTL && !isHighLevel) {
     const err = new Error('Access denied — you must be the task creator or an assigned team lead to submit');
@@ -349,7 +422,7 @@ async function submitTask({ id, requestingUser, req }) {
   }
   task = directTask;
 
-  assertStatus(task, [TASK_STATUS.IN_PROGRESS], 'Task must be IN_PROGRESS to submit');
+  assertStatus(task, [TASK_STATUS.IN_PROGRESS, TASK_STATUS.REOPENED], 'Task must be IN_PROGRESS or REOPENED to submit');
 
   const pendingSubTasks = await db.SubTask.count({
     where: { taskId: id, status: { [Op.notIn]: ['TEAM_LEAD_APPROVED', 'FINAL_APPROVED'] } },
@@ -360,7 +433,6 @@ async function submitTask({ id, requestingUser, req }) {
   }
 
   await db.Task.update({ status: TASK_STATUS.SUBMITTED, submittedAt: new Date() }, { where: { id } });
-  const updated = await getFullTask(id);
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.TASK_SUBMITTED, category: AUDIT_CATEGORY.TASK,
@@ -369,11 +441,12 @@ async function submitTask({ id, requestingUser, req }) {
   });
   if (task.managerId) {
     await _createNotifications([task.managerId], {
-      type: 'TASK_SUBMITTED', title: 'Task Submitted for Approval',
-      message: `Task "${task.title}" has been submitted for your approval`, entityType: 'Task', entityId: id,
+      type: 'TASK_SUBMITTED', title: 'Ticket Submitted for Approval',
+      message: `Ticket "${task.title}" has been submitted for your approval`, entityType: 'Task', entityId: id,
     });
   }
 
+  const updated = await getTaskById({ id, requestingUser });
   return updated;
 }
 
@@ -396,8 +469,8 @@ async function approveTask({ id, requestingUser, remark, req }) {
   const assignments = await db.TaskAssignment.findAll({ where: { taskId: id }, attributes: ['teamLeadId'] });
   const leadIds = assignments.map(a => a.teamLeadId);
   await _createNotifications([task.createdById, ...leadIds], {
-    type: 'TASK_APPROVED', title: 'Task Approved!',
-    message: `Task "${task.title}" has been approved and marked complete`, entityType: 'Task', entityId: id,
+    type: 'TASK_APPROVED', title: 'Ticket Approved!',
+    message: `Ticket "${task.title}" has been approved and marked complete`, entityType: 'Task', entityId: id,
   });
 
   return updated;
@@ -410,8 +483,7 @@ async function reopenTask({ id, requestingUser, remark, req }) {
   if (!task) notFound();
   assertStatus(task, [TASK_STATUS.REJECTED, TASK_STATUS.COMPLETED, TASK_STATUS.SUBMITTED], 'Task cannot be reopened in its current state');
 
-  await task.update({ status: TASK_STATUS.REOPENED, managerRemark: remark || null });
-  const updated = await getFullTask(id);
+  await task.update({ status: TASK_STATUS.REOPENED, managerRemark: remark || null, managerActionAt: new Date() });
 
   await writeAuditLog({
     performedBy: requestingUser, action: AUDIT_ACTION.TASK_REOPENED, category: AUDIT_CATEGORY.TASK,
@@ -419,6 +491,7 @@ async function reopenTask({ id, requestingUser, remark, req }) {
     description: `Reopened task "${task.title}"${remark ? `: "${remark}"` : ''}`, req,
   });
 
+  const updated = await getTaskById({ id, requestingUser });
   return updated;
 }
 
@@ -439,7 +512,7 @@ async function deleteTask({ id, requestingUser, req }) {
 
 async function getTaskStats({ requestingUser }) {
   const where = { deletedAt: null };
-  if (requestingUser.roleLevel > 3) {
+  if (requestingUser.roleLevel <= 3) {
     // Can see all tasks
   } else {
     const taskIds = await _getAccessibleTaskIds(requestingUser);
@@ -474,7 +547,7 @@ async function _getManagerTask(id, user) {
     include: [{ model: db.TaskAssignment, as: 'assignments', attributes: ['teamLeadId'] }],
   });
   if (!task) notFound();
-  if (task.managerId !== user.id && user.roleLevel < 5) {
+  if (task.managerId !== user.id && user.roleLevel > 2) {
     const err = new Error('Access denied — not your task'); err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
   return task;
@@ -493,7 +566,7 @@ async function _getTeamLeadTask(id, user) {
 }
 
 function _assertCanViewTask(user, task) {
-  if (user.roleLevel > 3) return;
+  if (user.roleLevel <= 3) return; // MANAGER or above can view all tasks
   const taskJson = task.toJSON ? task.toJSON() : task;
   if (taskJson.createdById === user.id) return;
   if (taskJson.manager?.id === user.id || taskJson.managerId === user.id) return;

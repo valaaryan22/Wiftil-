@@ -1,6 +1,6 @@
 'use strict';
 
-// Dynamic role definitions — admins can create custom roles with an access level (1–5)
+// Dynamic role definitions — lower accessLevel = more authority (BOSS = 1, EMPLOYEE = 5+)
 module.exports = (sequelize, DataTypes) => {
   const RoleDefinition = sequelize.define('RoleDefinition', {
     id: {
