@@ -130,11 +130,11 @@ async function generateClientInvoicesForDay(targetDay, systemUserId) {
         }
       }
 
-      // 5. Try to get tax rate from billing config, default to 18%
+      // 5. Try to get tax rate from billing config, default to 0%
       const billingConfig = await db.InvoiceBillingConfig.findOne({
         where: { clientId: client.id, isActive: true },
       });
-      const taxRate   = billingConfig?.defaultTaxRate ? parseFloat(billingConfig.defaultTaxRate) : 18;
+      const taxRate   = billingConfig?.defaultTaxRate ? parseFloat(billingConfig.defaultTaxRate) : 0;
       const dueDays   = billingConfig?.defaultDueDays || 15;
       const taxAmount = parseFloat(((baseAmount * taxRate) / 100).toFixed(2));
 

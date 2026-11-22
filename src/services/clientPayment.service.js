@@ -95,7 +95,7 @@ async function createInvoice({ requestingUser, clientId, data, req }) {
     description, internalNotes,
     amount:         parseFloat(amount         || 0),
     taxAmount:      parseFloat(taxAmount      || 0),
-    taxRate:        taxRate    ? parseFloat(taxRate)    : null,
+    taxRate:        (taxRate !== undefined && taxRate !== null) ? parseFloat(taxRate) : 0,
     discountAmount: parseFloat(discountAmount || 0),
     penaltyAmount:  parseFloat(penaltyAmount  || 0),
     paidAmount:     0,

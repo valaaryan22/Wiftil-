@@ -125,6 +125,15 @@ const downloadInvoicePdf = async (req, res, next) => {
     // Address format
     const clientAddress = invoice.client.locationPreference || 'Address not provided';
 
+    const subTotal = parseFloat(invoice.amount || 0);
+    const discountAmount = parseFloat(invoice.discountAmount || 0);
+    const taxableAmount = subTotal - discountAmount;
+    // Currently 0% GST is enforced across all invoices and PDF downloads (no 18% GST)
+    const rawTaxRate = parseFloat(invoice.taxRate || 0);
+    const taxRate = rawTaxRate === 18 ? 0 : rawTaxRate;
+    const taxAmount = rawTaxRate === 18 ? 0 : parseFloat(invoice.taxAmount || 0);
+    const totalAmount = taxableAmount + taxAmount;
+
     const pdfData = {
       clientName: invoice.client.name,
       clientAddress: clientAddress,
@@ -141,13 +150,13 @@ const downloadInvoicePdf = async (req, res, next) => {
       items: items,
       currencySymbol: invoice.currency === 'INR' ? '₹' : (invoice.currency === 'USD' ? '$' : invoice.currency + ' '),
       qrCodeDataUri: null,
-      subTotal: parseFloat(invoice.amount),
-      discountAmount: parseFloat(invoice.discountAmount),
-      taxableAmount: parseFloat(invoice.amount) - parseFloat(invoice.discountAmount),
-      taxRate: parseFloat(invoice.taxRate || 0),
-      taxAmount: parseFloat(invoice.taxAmount),
-      amountInWords: numberToWords(Math.round(parseFloat(invoice.totalAmount))),
-      totalAmount: parseFloat(invoice.totalAmount)
+      subTotal: subTotal,
+      discountAmount: discountAmount,
+      taxableAmount: taxableAmount,
+      taxRate: taxRate,
+      taxAmount: taxAmount,
+      amountInWords: numberToWords(Math.round(totalAmount)),
+      totalAmount: totalAmount
     };
     
     const pdfBuffer = await generatePdf('invoice', pdfData);

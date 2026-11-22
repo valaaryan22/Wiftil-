@@ -21,7 +21,7 @@ const registerValidator = [
     .isLength({ max: 50 }).withMessage('Last name max 50 chars'),
   body('department').optional().trim().isLength({ max: 100 }),
   body('jobTitle').optional().trim().isLength({ max: 100 }),
-  body('phone').optional().isMobilePhone().withMessage('Invalid phone number'),
+  body('phone').optional({ checkFalsy: true, nullable: true }).matches(/^[+]?[\d\s\-()]{7,20}$/).withMessage('Invalid phone number'),
 ];
 
 const loginValidator = [
@@ -58,7 +58,7 @@ const updateUserValidator = [
   param('id').isUUID().withMessage('Valid user ID is required'),
   body('firstName').optional().trim().isLength({ max: 50 }),
   body('lastName').optional().trim().isLength({ max: 50 }),
-  body('phone').optional().isMobilePhone().withMessage('Invalid phone number'),
+  body('phone').optional({ checkFalsy: true, nullable: true }).matches(/^[+]?[\d\s\-()]{7,20}$/).withMessage('Invalid phone number'),
   body('department').optional().trim().isLength({ max: 100 }),
   body('jobTitle').optional().trim().isLength({ max: 100 }),
   body('canAccessFinance').optional().isBoolean().toBoolean(),

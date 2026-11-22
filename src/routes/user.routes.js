@@ -32,7 +32,7 @@ router.post(
     body('roleId').notEmpty().withMessage('roleId (UUID or role name) is required'),
     body('department').optional().trim().isLength({ max: 100 }),
     body('jobTitle').optional().trim().isLength({ max: 100 }),
-    body('phone').optional().isMobilePhone().withMessage('Invalid phone number'),
+    body('phone').optional({ checkFalsy: true, nullable: true }).matches(/^[+]?[\d\s\-()]{7,20}$/).withMessage('Invalid phone number'),
     body('managerId').optional().isUUID().withMessage('managerId must be a valid UUID'),
   ],
   validate,

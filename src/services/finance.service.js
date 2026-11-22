@@ -477,7 +477,7 @@ async function createInvoice({ requestingUser, data, req }) {
     dueDate:       dueDate || null,
     amount:        baseAmount,
     taxAmount:     computedTax,
-    taxRate:       computedTaxRate || null,
+    taxRate:       computedTaxRate !== undefined && !isNaN(computedTaxRate) ? computedTaxRate : 0,
     discountAmount: parseFloat(discountAmount || 0),
     penaltyAmount:  parseFloat(penaltyAmount || 0),
     paidAmount:    0,

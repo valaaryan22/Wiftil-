@@ -45,8 +45,9 @@ function authorizeLevel(maxLevel) {
 
     const userLevel = req.user.roleLevel || 999;
     if (userLevel > maxLevel) {
-      // Allow users with explicit canAccessFinance flag to access finance-related routes (threshold <= 3)
-      if (req.user.canAccessFinance === true && maxLevel >= 3) {
+      // Allow users with explicit canAccessFinance flag or Finance department to access finance-related routes (threshold <= 3)
+      const hasFinanceAccess = req.user.canAccessFinance === true || (req.user.department && req.user.department.toLowerCase().includes('finance'));
+      if (hasFinanceAccess && maxLevel >= 3) {
         return next();
       }
       return errorResponse(res, {
@@ -120,8 +121,10 @@ function authorizePermission(flag) {
     // Level 1 (BOSS) always has full access
     if (req.user.roleLevel === 1) return next();
 
-    // Check specific permission flag
+    // Check specific permission flag or Finance department
     if (req.user[flag] === true) return next();
+    if (flag === 'canAccessFinance' && req.user.department && req.user.department.toLowerCase().includes('finance')) return next();
+    if ((flag === 'canAccessSalary' || flag === 'canAccessBanking') && req.user.department && req.user.department.toLowerCase().includes('finance')) return next();
 
     return errorResponse(res, {
       statusCode: HTTP_STATUS.FORBIDDEN,

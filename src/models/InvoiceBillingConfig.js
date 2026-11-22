@@ -81,8 +81,9 @@ module.exports = (sequelize, DataTypes) => {
       // GST % to apply on auto-generated invoices
       type: DataTypes.DECIMAL(5, 2),
       allowNull: true,
+      defaultValue: 0.00,
       field: 'default_tax_rate',
-      comment: 'Default GST/tax rate for auto-generated invoices e.g. 18.00',
+      comment: 'Default GST/tax rate for auto-generated invoices e.g. 0.00',
     },
     defaultDueDays: {
       // How many days after invoice date is payment due?

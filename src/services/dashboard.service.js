@@ -203,7 +203,7 @@ async function getDashboardSummary(userId) {
       : null;
 
   const activeTaskCount = taskRows.filter((t) => t.status !== 'COMPLETED').length;
-  const activeSubTaskCount = subTaskRows.filter((s) => s.status !== 'FINAL_APPROVED').length;
+  const activeSubTaskCount = subTaskRows.filter((s) => !['FINAL_APPROVED', 'COMPLETED', 'TEAM_LEAD_APPROVED'].includes(s.status)).length;
 
   return {
     tasks: {
@@ -358,8 +358,8 @@ async function getDashboardSubTasks(userId, { page, limit, status, priority, sea
   } else if (status === 'ALL') {
     // Show all subtasks including final-approved
   } else {
-    // Hide completed/final-approved subtasks from dashboard view
-    where.status = { [Op.ne]: 'FINAL_APPROVED' };
+    // Hide completed/final-approved/team-lead-approved subtasks from dashboard view
+    where.status = { [Op.notIn]: ['FINAL_APPROVED', 'COMPLETED', 'TEAM_LEAD_APPROVED'] };
   }
   if (priority) where.priority = priority;
   if (search) where.title = { [Op.iLike]: `%${search}%` };

@@ -84,6 +84,7 @@ async function login({ email, password, req }) {
     throw err;
   }
 
+  const isFinanceUser = Boolean(user.canAccessFinance || (user.department && user.department.toLowerCase().includes('finance')));
   const tokenPayload = {
     sub:              user.id,
     email:            user.email,
@@ -101,9 +102,9 @@ async function login({ email, password, req }) {
     roleDisplay:      user.role.displayName,
     roleColor:        user.role.color      || null,
     // Module permission flags
-    canAccessFinance: user.canAccessFinance || false,
-    canAccessSalary:  user.canAccessSalary  || false,
-    canAccessBanking: user.canAccessBanking || false,
+    canAccessFinance: isFinanceUser,
+    canAccessSalary:  Boolean(user.canAccessSalary || isFinanceUser),
+    canAccessBanking: Boolean(user.canAccessBanking || isFinanceUser),
   };
 
   const accessToken  = generateAccessToken(tokenPayload);
@@ -188,6 +189,7 @@ async function refreshTokens({ refreshToken, req }) {
   }
 
   const { user } = storedToken;
+  const isFinanceUser = Boolean(user.canAccessFinance || (user.department && user.department.toLowerCase().includes('finance')));
   const tokenPayload = {
     sub:              user.id,
     email:            user.email,
@@ -205,9 +207,9 @@ async function refreshTokens({ refreshToken, req }) {
     roleDisplay:      user.role.displayName,
     roleColor:        user.role.color      || null,
     // Module permission flags
-    canAccessFinance: user.canAccessFinance || false,
-    canAccessSalary:  user.canAccessSalary  || false,
-    canAccessBanking: user.canAccessBanking || false,
+    canAccessFinance: isFinanceUser,
+    canAccessSalary:  Boolean(user.canAccessSalary || isFinanceUser),
+    canAccessBanking: Boolean(user.canAccessBanking || isFinanceUser),
   };
   const newAccessToken = generateAccessToken(tokenPayload);
 
@@ -330,6 +332,12 @@ async function getMe(userId) {
   });
   if (!user) return null;
   const userJson = user.toJSON();
+  const isFinanceUser = Boolean(userJson.canAccessFinance || (userJson.department && userJson.department.toLowerCase().includes('finance')));
+  userJson.canAccessFinance = isFinanceUser;
+  if (isFinanceUser) {
+    userJson.canAccessSalary = true;
+    userJson.canAccessBanking = true;
+  }
   if (user.role) {
     userJson.roleLevel = user.role.accessLevel;
     userJson.roleName = user.role.name;

@@ -11,7 +11,8 @@ const ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12');
 const INCLUDE_ROLE = { model: db.RoleDefinition, as: 'role', attributes: ['id', 'name', 'displayName', 'accessLevel', 'color'] };
 
 const USER_ATTRS = ['id', 'email', 'firstName', 'lastName', 'isActive', 'isEmailVerified',
-  'department', 'jobTitle', 'phone', 'managerId', 'profilePicture', 'createdAt', 'updatedAt'];
+  'department', 'jobTitle', 'phone', 'managerId', 'profilePicture',
+  'canAccessFinance', 'canAccessSalary', 'canAccessBanking', 'createdAt', 'updatedAt'];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,12 @@ function formatUser(user) {
   const u = user.toJSON ? user.toJSON() : { ...user };
   delete u.password;
   delete u.deletedAt;
+  const isFinance = Boolean(u.canAccessFinance || (u.department && String(u.department).toLowerCase().includes('finance')));
+  u.canAccessFinance = isFinance;
+  if (isFinance) {
+    u.canAccessSalary = true;
+    u.canAccessBanking = true;
+  }
   return u;
 }
 
@@ -62,7 +69,9 @@ async function inviteUser({ requestingUser, data, req }) {
 
   // Level 1 (BOSS) auto-grants all permissions
   const isBoss = requestingUser.roleLevel === 1;
+  const isFinanceDept = Boolean(department && String(department).toLowerCase().includes('finance'));
   const finalDept = (!department || String(department).trim() === '') && (canAccessFinance === true || isBoss) ? 'Finance' : department;
+  const grantFinance = canAccessFinance === true || isBoss || isFinanceDept;
 
   const user = await db.User.create({
     email,
@@ -70,9 +79,9 @@ async function inviteUser({ requestingUser, data, req }) {
     firstName, lastName, roleId: targetRole.id,
     department: finalDept, jobTitle, phone, managerId, isEmailVerified: false,
     profilePicture,
-    canAccessFinance: canAccessFinance === true || isBoss,
-    canAccessSalary:  canAccessSalary  === true || isBoss,
-    canAccessBanking: canAccessBanking === true || isBoss,
+    canAccessFinance: grantFinance,
+    canAccessSalary:  canAccessSalary  === true || isBoss || grantFinance,
+    canAccessBanking: canAccessBanking === true || isBoss || grantFinance,
   });
 
   const created = await db.User.findByPk(user.id, { attributes: USER_ATTRS, include: [INCLUDE_ROLE] });
@@ -177,8 +186,19 @@ async function updateUser({ id, requestingUser, data, req }) {
         updateData.department = 'Finance';
       }
     }
+    // If department was changed to Finance, auto-grant finance permissions
+    if (updateData.department && String(updateData.department).toLowerCase().includes('finance')) {
+      updateData.canAccessFinance = true;
+      updateData.canAccessSalary  = true;
+      updateData.canAccessBanking = true;
+    }
     if (data.canAccessSalary  !== undefined) updateData.canAccessSalary  = data.canAccessSalary  === true || data.canAccessSalary === 'true';
     if (data.canAccessBanking !== undefined) updateData.canAccessBanking = data.canAccessBanking === true || data.canAccessBanking === 'true';
+  } else if (updateData.department && String(updateData.department).toLowerCase().includes('finance')) {
+    // Even if self or not setting permissions directly, assigning to Finance department grants finance access
+    updateData.canAccessFinance = true;
+    updateData.canAccessSalary  = true;
+    updateData.canAccessBanking = true;
   }
 
   await target.update(updateData);
