@@ -59,9 +59,11 @@ const updateUserValidator = [
   body('firstName').optional().trim().isLength({ max: 50 }),
   body('lastName').optional().trim().isLength({ max: 50 }),
   body('phone').optional({ checkFalsy: true, nullable: true }).matches(/^[+]?[\d\s\-()]{7,20}$/).withMessage('Invalid phone number'),
-  body('department').optional().trim().isLength({ max: 100 }),
-  body('jobTitle').optional().trim().isLength({ max: 100 }),
+  body('department').optional({ nullable: true }).trim().isLength({ max: 100 }),
+  body('jobTitle').optional({ nullable: true }).trim().isLength({ max: 100 }),
   body('canAccessFinance').optional().isBoolean().toBoolean(),
+  body('canAccessSalary').optional().isBoolean().toBoolean(),
+  body('canAccessBanking').optional().isBoolean().toBoolean(),
 ];
 
 const updateRoleValidator = [

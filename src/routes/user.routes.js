@@ -30,10 +30,13 @@ router.post(
     body('firstName').trim().notEmpty().withMessage('First name required'),
     body('lastName').trim().notEmpty().withMessage('Last name required'),
     body('roleId').notEmpty().withMessage('roleId (UUID or role name) is required'),
-    body('department').optional().trim().isLength({ max: 100 }),
-    body('jobTitle').optional().trim().isLength({ max: 100 }),
+    body('department').optional({ checkFalsy: true, nullable: true }).trim().isLength({ max: 100 }),
+    body('jobTitle').optional({ checkFalsy: true, nullable: true }).trim().isLength({ max: 100 }),
     body('phone').optional({ checkFalsy: true, nullable: true }).matches(/^[+]?[\d\s\-()]{7,20}$/).withMessage('Invalid phone number'),
-    body('managerId').optional().isUUID().withMessage('managerId must be a valid UUID'),
+    body('managerId').optional({ checkFalsy: true, nullable: true }).isUUID().withMessage('managerId must be a valid UUID'),
+    body('canAccessFinance').optional().isBoolean().toBoolean(),
+    body('canAccessSalary').optional().isBoolean().toBoolean(),
+    body('canAccessBanking').optional().isBoolean().toBoolean(),
   ],
   validate,
   userController.inviteUser
@@ -92,6 +95,20 @@ router.patch(
   ],
   validate,
   userController.toggleUserStatus
+);
+
+// PATCH /users/:id/password — Level ≤ 3 (BOSS, ADMIN, MANAGER) can update any user's password
+router.patch(
+  '/:id/password',
+  authorizeLevel(3),
+  [
+    param('id').isUUID().withMessage('Valid user ID required'),
+    body('password')
+      .isLength({ min: 6 })
+      .withMessage('Password must be at least 6 characters long'),
+  ],
+  validate,
+  userController.updateUserPassword
 );
 
 // DELETE /users/:id — Level ≤ 2 (BOSS or ADMIN)

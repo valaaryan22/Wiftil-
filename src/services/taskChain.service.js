@@ -169,22 +169,12 @@ const DEFAULT_CHAINS = [
 ];
 
 async function seedDefaultChainsIfEmpty() {
-  try {
-    const count = await db.TaskChain.count();
-    if (count === 0) {
-      for (const item of DEFAULT_CHAINS) {
-        await db.TaskChain.create(item);
-      }
-    }
-  } catch (err) {
-    console.error('Error auto-seeding task chains:', err.message);
-  }
+  // Disabled: do not re-seed default chains when user deletes all chains
 }
 
 // ─── Service Methods ──────────────────────────────────────────────────────────
 
 async function getTaskChains({ search, category, isActive }) {
-  await seedDefaultChainsIfEmpty();
 
   const where = {};
   if (isActive !== undefined && isActive !== null && isActive !== '') {
@@ -211,7 +201,6 @@ async function getTaskChains({ search, category, isActive }) {
 }
 
 async function getTaskChainById(id) {
-  await seedDefaultChainsIfEmpty();
 
   const chain = await db.TaskChain.findOne({
     where: {

@@ -155,7 +155,22 @@ async function uploadProfilePicture(req, res, next) {
   }
 }
 
+async function updateUserPassword(req, res, next) {
+  try {
+    const user = await userService.updateUserPassword({
+      id: req.params.id,
+      requestingUser: req.user,
+      password: req.body.password,
+      req,
+    });
+    return successResponse(res, { message: 'Password updated successfully', data: { user } });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   inviteUser, getAllUsers, getUserById, updateUser,
   updateUserRole, toggleUserStatus, deleteUser, getMyTeam, uploadProfilePicture,
+  updateUserPassword,
 };
