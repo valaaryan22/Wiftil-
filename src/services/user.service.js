@@ -67,11 +67,13 @@ async function inviteUser({ requestingUser, data, req }) {
     err.statusCode = HTTP_STATUS.FORBIDDEN; throw err;
   }
 
-  // Level 1 (BOSS) auto-grants all permissions
-  const isBoss = requestingUser.roleLevel === 1;
+  // Department & Permissions logic
   const isFinanceDept = Boolean(department && String(department).toLowerCase().includes('finance'));
-  const finalDept = (!department || String(department).trim() === '') && (canAccessFinance === true || isBoss) ? 'Finance' : department;
-  const grantFinance = canAccessFinance === true || isBoss || isFinanceDept;
+  const finalDept = department && String(department).trim() ? String(department).trim() : null;
+  const isTargetBoss = targetRole.accessLevel === 1;
+  const grantFinance = isFinanceDept || canAccessFinance === true || canAccessFinance === 'true' || isTargetBoss;
+  const grantSalary  = grantFinance || canAccessSalary === true || canAccessSalary === 'true' || isTargetBoss;
+  const grantBanking = grantFinance || canAccessBanking === true || canAccessBanking === 'true' || isTargetBoss;
 
   const user = await db.User.create({
     email,
@@ -80,8 +82,8 @@ async function inviteUser({ requestingUser, data, req }) {
     department: finalDept, jobTitle, phone, managerId, isEmailVerified: false,
     profilePicture,
     canAccessFinance: grantFinance,
-    canAccessSalary:  canAccessSalary  === true || isBoss || grantFinance,
-    canAccessBanking: canAccessBanking === true || isBoss || grantFinance,
+    canAccessSalary:  grantSalary,
+    canAccessBanking: grantBanking,
   });
 
   const created = await db.User.findByPk(user.id, { attributes: USER_ATTRS, include: [INCLUDE_ROLE] });
@@ -174,26 +176,37 @@ async function updateUser({ id, requestingUser, data, req }) {
 
   const allowedFields = ['firstName', 'lastName', 'phone', 'department', 'jobTitle', 'profilePicture'];
   const updateData = {};
-  allowedFields.forEach((f) => { if (data[f] !== undefined) updateData[f] = data[f]; });
+  allowedFields.forEach((f) => {
+    if (data[f] !== undefined) {
+      if (f === 'department') {
+        updateData.department = data.department && String(data.department).trim() ? String(data.department).trim() : null;
+      } else {
+        updateData[f] = data[f];
+      }
+    }
+  });
 
   // Permission flags can only be set by higher-authority users or Admin/Boss (level <= 2)
   if (!isSelf && (requestingUser.roleLevel <= 2 || isHigher)) {
-    if (data.canAccessFinance !== undefined) {
-      const grantFinance = data.canAccessFinance === true || data.canAccessFinance === 'true';
-      updateData.canAccessFinance = grantFinance;
-      // If granted finance access and user has no department, assign to 'Finance' department
-      if (grantFinance && (!updateData.department || String(updateData.department).trim() === '') && !target.department) {
-        updateData.department = 'Finance';
-      }
-    }
-    // If department was changed to Finance, auto-grant finance permissions
-    if (updateData.department && String(updateData.department).toLowerCase().includes('finance')) {
+    const deptToCheck = updateData.department !== undefined ? updateData.department : target.department;
+    const isFinanceDept = Boolean(deptToCheck && String(deptToCheck).toLowerCase().includes('finance'));
+
+    if (isFinanceDept) {
+      // If department is Finance, auto-grant finance permissions
       updateData.canAccessFinance = true;
       updateData.canAccessSalary  = true;
       updateData.canAccessBanking = true;
+    } else {
+      if (data.canAccessFinance !== undefined) {
+        updateData.canAccessFinance = data.canAccessFinance === true || data.canAccessFinance === 'true';
+      }
+      if (data.canAccessSalary !== undefined) {
+        updateData.canAccessSalary = data.canAccessSalary === true || data.canAccessSalary === 'true';
+      }
+      if (data.canAccessBanking !== undefined) {
+        updateData.canAccessBanking = data.canAccessBanking === true || data.canAccessBanking === 'true';
+      }
     }
-    if (data.canAccessSalary  !== undefined) updateData.canAccessSalary  = data.canAccessSalary  === true || data.canAccessSalary === 'true';
-    if (data.canAccessBanking !== undefined) updateData.canAccessBanking = data.canAccessBanking === true || data.canAccessBanking === 'true';
   } else if (updateData.department && String(updateData.department).toLowerCase().includes('finance')) {
     // Even if self or not setting permissions directly, assigning to Finance department grants finance access
     updateData.canAccessFinance = true;
@@ -336,4 +349,48 @@ async function getMyTeam({ requestingUser }) {
   return users.map(formatUser);
 }
 
-module.exports = { inviteUser, getAllUsers, getUserById, updateUser, updateUserRole, toggleUserStatus, deleteUser, getMyTeam };
+async function updateUserPassword({ id, requestingUser, password, req }) {
+  // Level <= 3 (BOSS, ADMIN, MANAGER) required to update passwords
+  if (requestingUser.roleLevel > 3) {
+    const err = new Error('Manager level or above (level ≤ 3) required to update passwords');
+    err.statusCode = HTTP_STATUS.FORBIDDEN;
+    throw err;
+  }
+
+  const target = await db.User.findOne({
+    where: { id, deletedAt: null },
+    include: [INCLUDE_ROLE],
+  });
+  if (!target) {
+    const err = new Error('User not found');
+    err.statusCode = HTTP_STATUS.NOT_FOUND;
+    throw err;
+  }
+
+  // Update password (User model beforeUpdate hook hashes it with bcrypt)
+  await target.update({ password });
+  userCache.invalidateUser(id);
+
+  // Invalidate any active refresh tokens for the target user
+  await db.Token.update(
+    { isRevoked: true },
+    { where: { userId: id, isRevoked: false } }
+  );
+
+  await writeAuditLog({
+    performedBy: requestingUser,
+    action: AUDIT_ACTION.PASSWORD_CHANGED || 'PASSWORD_CHANGED',
+    category: AUDIT_CATEGORY.USER || 'USER',
+    entity: 'User',
+    entityId: id,
+    entityName: `${target.firstName} ${target.lastName}`,
+    targetUserId: id,
+    targetUserName: `${target.firstName} ${target.lastName}`,
+    description: `Password updated for "${target.firstName} ${target.lastName}" <${target.email}> by ${requestingUser.firstName} ${requestingUser.lastName}`,
+    req,
+  });
+
+  return formatUser(target);
+}
+
+module.exports = { inviteUser, getAllUsers, getUserById, updateUser, updateUserRole, toggleUserStatus, deleteUser, getMyTeam, updateUserPassword };

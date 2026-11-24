@@ -11,10 +11,12 @@ const { param, query }   = require('express-validator');
 
 router.use(authenticate);
 
-// GET /audit-logs/stats — Level ≤ 3 (MANAGER+)
+// All audit-log routes are restricted to Level 1 & Level 2 (BOSS & ADMIN) only
+router.use(authorizeLevel(2));
+
+// GET /audit-logs/stats — Level ≤ 2 (BOSS & ADMIN only)
 router.get(
   '/stats',
-  authorizeLevel(3),
   [
     query('dateFrom').optional().isISO8601().withMessage('dateFrom must be ISO date'),
     query('dateTo').optional().isISO8601().withMessage('dateTo must be ISO date'),
@@ -23,7 +25,7 @@ router.get(
   auditLogController.getAuditStats
 );
 
-// GET /audit-logs — Level 1 sees own; Level 4+ sees team/all
+// GET /audit-logs — Level ≤ 2 (BOSS & ADMIN only)
 router.get(
   '/',
   [
@@ -41,7 +43,7 @@ router.get(
   auditLogController.getAuditLogs
 );
 
-// GET /audit-logs/:id
+// GET /audit-logs/:id — Level ≤ 2 (BOSS & ADMIN only)
 router.get(
   '/:id',
   [param('id').isUUID().withMessage('Valid log ID required')],
