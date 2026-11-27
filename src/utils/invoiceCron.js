@@ -18,28 +18,78 @@ const { Op } = require('sequelize');
 const { db } = require('../database/client');
 const logger = require('../utils/logger');
 
+// ── IST Date & System User Helpers ───────────────────────────────────────────
+function getIstDateInfo(baseDate = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(baseDate);
+
+  const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  const year = parseInt(map.year, 10);
+  const month = parseInt(map.month, 10);
+  const day = parseInt(map.day, 10);
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const todayStr = `${map.year}-${map.month}-${map.day}`;
+  const billingMonth = `${map.year}-${map.month}`;
+  const monthLabel = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    month: 'long',
+    year: 'numeric',
+  }).format(baseDate);
+
+  return { year, month, day, daysInMonth, todayStr, billingMonth, monthLabel };
+}
+
+async function findSystemUserId() {
+  const bossUser = await db.User.findOne({
+    where: { isActive: true, deletedAt: null },
+    include: [{
+      model: db.RoleDefinition,
+      as: 'role',
+      where: { accessLevel: 1 },
+      attributes: [],
+      required: true,
+    }],
+    attributes: ['id'],
+  });
+  if (bossUser) return bossUser.id;
+
+  const fallback = await db.User.findOne({
+    where: { isActive: true, deletedAt: null },
+    attributes: ['id'],
+  });
+  return fallback ? fallback.id : null;
+}
+
 // ── Core generation logic (called by cron + manual trigger) ───────────────────
 async function generateClientInvoicesForDay(targetDay, systemUserId) {
-  const today = new Date();
-  const billingMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
-  const todayStr     = today.toISOString().slice(0, 10);
+  const ist = getIstDateInfo();
+  const resolvedDay = parseInt(targetDay, 10) || ist.day;
+  const billingMonth = ist.billingMonth;
+  const todayStr     = ist.todayStr;
+  const isLastDayOfMonth = resolvedDay === ist.daysInMonth && ist.daysInMonth < 31;
+  const billingDayCond = isLastDayOfMonth ? { [Op.gte]: resolvedDay } : resolvedDay;
 
-  logger.info(`[InvoiceCron] Running for day=${targetDay}, month=${billingMonth}`);
+  logger.info(`[InvoiceCron] Running for day=${resolvedDay}, month=${billingMonth}`);
 
-  // 1. Find all active clients whose billing day is today OR who have active billing configs due today
+  // 1. Find all active auto-generate billing configs due today
+  let configByClientId = {};
   let configClientIds = [];
   try {
-    const billingConfigs = await db.InvoiceBillingConfig.findAll({
-      where: {
-        isActive: true,
-        [Op.or]: [
-          { billingDay: targetDay },
-          { nextDueAt: { [Op.lte]: todayStr } },
-        ],
-      },
-      attributes: ['clientId'],
-    });
-    configClientIds = billingConfigs.map(c => c.clientId);
+    const allConfigs = await db.InvoiceBillingConfig.findAll();
+    for (const cfg of allConfigs) {
+      configByClientId[cfg.clientId] = cfg;
+      if (
+        cfg.isActive &&
+        cfg.isAutoGenerate &&
+        (cfg.billingDay === resolvedDay || (isLastDayOfMonth && cfg.billingDay >= resolvedDay) || (cfg.nextDueAt && cfg.nextDueAt <= todayStr))
+      ) {
+        configClientIds.push(cfg.clientId);
+      }
+    }
   } catch (cfgErr) {
     logger.warn('[InvoiceCron] Could not query InvoiceBillingConfig:', cfgErr.message);
   }
@@ -49,11 +99,11 @@ async function generateClientInvoicesForDay(targetDay, systemUserId) {
   };
   if (configClientIds.length > 0) {
     clientWhere[Op.or] = [
-      { billingDate: targetDay },
+      { billingDate: billingDayCond },
       { id: { [Op.in]: configClientIds } },
     ];
   } else {
-    clientWhere.billingDate = targetDay;
+    clientWhere.billingDate = billingDayCond;
   }
 
   const clients = await db.Client.findAll({ where: clientWhere });
@@ -68,6 +118,24 @@ async function generateClientInvoicesForDay(targetDay, systemUserId) {
 
   for (const client of clients) {
     try {
+      const billingConfig = configByClientId[client.id] || null;
+
+      // Respect InvoiceBillingConfig flags when present
+      if (billingConfig) {
+        if (!billingConfig.isActive) {
+          skipped.push({ clientId: client.id, clientName: client.name, reason: 'Billing config is inactive' });
+          continue;
+        }
+        if (!billingConfig.isAutoGenerate) {
+          skipped.push({ clientId: client.id, clientName: client.name, reason: 'Auto-generate disabled in billing config' });
+          continue;
+        }
+        if (billingConfig.billingFrequency !== 'MONTHLY' && billingConfig.nextDueAt && billingConfig.nextDueAt > todayStr) {
+          skipped.push({ clientId: client.id, clientName: client.name, reason: `Not due until ${billingConfig.nextDueAt} (${billingConfig.billingFrequency})` });
+          continue;
+        }
+      }
+
       // 2. Skip if an invoice for this client already exists this month
       const existing = await db.ClientPayment.findOne({
         where: {
@@ -84,10 +152,12 @@ async function generateClientInvoicesForDay(targetDay, systemUserId) {
         continue;
       }
 
-      // 3. Find client's active packages
-      const packages = await db.ClientPackage.findAll({
-        where: { clientId: client.id, status: 'ACTIVE', deletedAt: null },
-      });
+      // 3. Find client's active packages (or configured package)
+      const pkgWhere = { clientId: client.id, status: 'ACTIVE', deletedAt: null };
+      if (billingConfig?.packageId) {
+        pkgWhere.id = billingConfig.packageId;
+      }
+      const packages = await db.ClientPackage.findAll({ where: pkgWhere });
 
       if (packages.length === 0) {
         skipped.push({ clientId: client.id, clientName: client.name, reason: 'No active packages' });
@@ -95,51 +165,51 @@ async function generateClientInvoicesForDay(targetDay, systemUserId) {
         continue;
       }
 
-      // 4. Build line items from ALL active packages + their DELIVERED add-ons
+      // 4. Build line items from active packages + DELIVERED add-ons (when enabled)
+      const includeAddOns = billingConfig ? billingConfig.includeAddOns !== false : true;
       const lineItems = [];
       let baseAmount  = 0;
 
       for (const pkg of packages) {
         const pkgAmount = parseFloat(pkg.basePrice || 0);
         lineItems.push({
-          description: `${pkg.name} — Retainer (${today.toLocaleString('default', { month: 'long' })} ${today.getFullYear()})`,
+          description: `${pkg.name} — Retainer (${ist.monthLabel})`,
           quantity:    1,
           unitPrice:   pkgAmount,
           amount:      pkgAmount,
         });
         baseAmount += pkgAmount;
 
-        // Include DELIVERED add-ons for this package
-        const addOns = await db.PackageAddOn.findAll({
-          where: { packageId: pkg.id, status: 'DELIVERED' },
-          include: [{ model: db.ServiceCatalog, as: 'service', attributes: ['name'], required: false }],
-        });
-
-        for (const addOn of addOns) {
-          const addOnAmount = parseFloat(addOn.totalPrice || addOn.unitPrice || 0);
-          lineItems.push({
-            description: addOn.service?.name || addOn.customDescription || 'Add-on Service',
-            quantity:    addOn.quantity || 1,
-            unitPrice:   parseFloat(addOn.unitPrice || 0),
-            amount:      addOnAmount,
+        if (includeAddOns) {
+          // Include DELIVERED add-ons for this package
+          const addOns = await db.PackageAddOn.findAll({
+            where: { packageId: pkg.id, status: 'DELIVERED' },
+            include: [{ model: db.ServiceCatalog, as: 'service', attributes: ['name'], required: false }],
           });
-          baseAmount += addOnAmount;
 
-          // Mark add-on as BILLED
-          await addOn.update({ status: 'BILLED', billedAt: new Date() });
+          for (const addOn of addOns) {
+            const addOnAmount = parseFloat(addOn.totalPrice || addOn.unitPrice || 0);
+            lineItems.push({
+              description: addOn.service?.name || addOn.customDescription || 'Add-on Service',
+              quantity:    addOn.quantity || 1,
+              unitPrice:   parseFloat(addOn.unitPrice || 0),
+              amount:      addOnAmount,
+            });
+            baseAmount += addOnAmount;
+
+            // Mark add-on as BILLED
+            await addOn.update({ status: 'BILLED', billedAt: new Date() });
+          }
         }
       }
 
-      // 5. Try to get tax rate from billing config, default to 0%
-      const billingConfig = await db.InvoiceBillingConfig.findOne({
-        where: { clientId: client.id, isActive: true },
-      });
+      // 5. Tax rate and due days from billing config, defaulting to 0% / 15 days
       const taxRate   = billingConfig?.defaultTaxRate ? parseFloat(billingConfig.defaultTaxRate) : 0;
       const dueDays   = billingConfig?.defaultDueDays || 15;
       const taxAmount = parseFloat(((baseAmount * taxRate) / 100).toFixed(2));
 
-      const dueDate = new Date(today);
-      dueDate.setDate(dueDate.getDate() + dueDays);
+      const dueDate = new Date(Date.UTC(ist.year, ist.month - 1, ist.day + dueDays));
+      const dueDateStr = dueDate.toISOString().slice(0, 10);
 
       // 6. Create the DRAFT invoice
       const invoice = await db.ClientPayment.create({
@@ -151,27 +221,28 @@ async function generateClientInvoicesForDay(targetDay, systemUserId) {
         paymentStatus: 'UNPAID',
         status:        'DRAFT',
         invoiceDate:   todayStr,
-        dueDate:       dueDate.toISOString().slice(0, 10),
+        dueDate:       dueDateStr,
         amount:        baseAmount,
         taxAmount,
-        taxRate:       taxRate || null,
+        taxRate:       taxRate || 0,
         discountAmount: 0,
         penaltyAmount:  0,
         paidAmount:    0,
         currency:      'INR',
         lineItems:     lineItems.length > 0 ? lineItems : null,
         description:   `Auto-generated invoice — ${client.name} (${billingMonth})`,
+        internalNotes: billingConfig?.notes || null,
         billingMonth,
         billingConfigId: billingConfig?.id || null,
       });
 
-      // 7. Update billing config's lastGeneratedAt
+      // 7. Update billing config's lastGeneratedAt & nextDueAt
       if (billingConfig) {
-        const nextDue = new Date(today);
-        if (billingConfig.billingFrequency === 'MONTHLY')   nextDue.setMonth(nextDue.getMonth() + 1);
-        else if (billingConfig.billingFrequency === 'QUARTERLY') nextDue.setMonth(nextDue.getMonth() + 3);
-        else if (billingConfig.billingFrequency === 'ANNUAL')    nextDue.setFullYear(nextDue.getFullYear() + 1);
-        nextDue.setDate(targetDay);
+        let nextMonths = 1;
+        if (billingConfig.billingFrequency === 'QUARTERLY') nextMonths = 3;
+        else if (billingConfig.billingFrequency === 'ANNUAL') nextMonths = 12;
+
+        const nextDue = new Date(Date.UTC(ist.year, ist.month - 1 + nextMonths, billingConfig.billingDay || resolvedDay));
 
         await billingConfig.update({
           lastGeneratedAt: new Date(),
@@ -180,10 +251,11 @@ async function generateClientInvoicesForDay(targetDay, systemUserId) {
       }
 
       generated.push({
-        invoiceId:   invoice.id,
-        clientName:  client.name,
-        amount:      baseAmount + taxAmount,
-        lineItems:   lineItems.length,
+        invoiceId:     invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        clientName:    client.name,
+        amount:        baseAmount + taxAmount,
+        lineItems:     lineItems.length,
       });
 
       logger.info(`[InvoiceCron] ✅ Draft invoice created for ${client.name} — ₹${(baseAmount + taxAmount).toFixed(2)}`);
@@ -204,28 +276,24 @@ function startInvoiceCron() {
 
   // Runs every day at 12:00 AM (midnight) IST
   cron.schedule('0 0 * * *', async () => {
-    const today    = new Date();
-    const todayDay = today.getDate();
-    logger.info(`[DailyCron] 🕛 Triggered at 00:00 — day=${todayDay}`);
+    const ist      = getIstDateInfo();
+    const todayDay = ist.day;
+    logger.info(`[DailyCron] 🕛 Triggered at 00:00 IST — date=${ist.todayStr}, day=${todayDay}`);
 
     try {
-      // Find a BOSS user to attribute auto-generated records to
-      const systemUser = await db.User.findOne({
-        where: { roleLevel: 1, deletedAt: null },
-        attributes: ['id'],
-      });
+      const systemUserId = await findSystemUserId();
 
-      if (!systemUser) {
+      if (!systemUserId) {
         logger.error('[DailyCron] No admin user found — skipping auto-generation');
         return;
       }
 
       // 1. Auto-generate client invoices
-      const invoiceResult = await generateClientInvoicesForDay(todayDay, systemUser.id);
+      const invoiceResult = await generateClientInvoicesForDay(todayDay, systemUserId);
       logger.info(`[DailyCron] 📄 Invoices: ${invoiceResult.generated.length} generated, ${invoiceResult.skipped.length} skipped`);
 
       // 2. Auto-generate employee payroll entries
-      const payrollResult = await generatePayrollForDay(todayDay, systemUser.id);
+      const payrollResult = await generatePayrollForDay(todayDay, systemUserId);
       logger.info(`[DailyCron] 💰 Payroll: ${payrollResult.generated.length} generated, ${payrollResult.skipped.length} skipped`);
 
     } catch (err) {
@@ -241,20 +309,19 @@ function startInvoiceCron() {
 // ── Manual trigger helper ───────────────────────────────────────────────────
 async function runDailyCronNow(forcedDay = null) {
   const { generatePayrollForDay } = require('../services/salary.service');
-  const today = new Date();
-  const todayDay = forcedDay !== null ? parseInt(forcedDay, 10) : today.getDate();
+  const ist = getIstDateInfo();
+  const todayDay = forcedDay !== null && forcedDay !== undefined && forcedDay !== ''
+    ? parseInt(forcedDay, 10)
+    : ist.day;
 
-  const systemUser = await db.User.findOne({
-    where: { roleLevel: 1, deletedAt: null },
-    attributes: ['id'],
-  }) || await db.User.findOne({ where: { deletedAt: null }, attributes: ['id'] });
+  const systemUserId = await findSystemUserId();
 
-  if (!systemUser) {
+  if (!systemUserId) {
     throw new Error('No user found to attribute auto-generated records to');
   }
 
-  const invoiceResult = await generateClientInvoicesForDay(todayDay, systemUser.id);
-  const payrollResult = await generatePayrollForDay(todayDay, systemUser.id);
+  const invoiceResult = await generateClientInvoicesForDay(todayDay, systemUserId);
+  const payrollResult = await generatePayrollForDay(todayDay, systemUserId);
 
   return {
     day: todayDay,
@@ -263,5 +330,5 @@ async function runDailyCronNow(forcedDay = null) {
   };
 }
 
-module.exports = { startInvoiceCron, generateClientInvoicesForDay, runDailyCronNow };
+module.exports = { startInvoiceCron, generateClientInvoicesForDay, runDailyCronNow, findSystemUserId };
 

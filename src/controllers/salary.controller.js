@@ -85,12 +85,12 @@ async function cancelPayroll(req, res, next) {
 
 async function manualGenerate(req, res, next) {
   try {
-    const { db } = require('../database/client');
-    const systemUser = await db.User.findOne({ where: { roleLevel: 1, deletedAt: null }, attributes: ['id'] });
-    if (!systemUser) return successResponse(res, { statusCode: 400, message: 'No admin user found', data: null });
+    const { findSystemUserId } = require('../utils/invoiceCron');
+    const systemUserId = await findSystemUserId();
+    if (!systemUserId) return successResponse(res, { statusCode: 400, message: 'No admin user found', data: null });
 
-    const day = parseInt(req.body.day) || new Date().getDate();
-    const result = await salaryService.generatePayrollForDay(day, systemUser.id);
+    const day = parseInt(req.body.day, 10) || new Date().getDate();
+    const result = await salaryService.generatePayrollForDay(day, systemUserId);
     return successResponse(res, { message: 'Payroll generation triggered', data: result });
   } catch (err) { next(err); }
 }

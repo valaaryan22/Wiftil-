@@ -52,6 +52,26 @@ const changePasswordValidator = [
     }),
 ];
 
+const forgotPasswordValidator = [
+  body('email')
+    .isEmail().withMessage('Valid email is required')
+    .normalizeEmail(),
+];
+
+const verifyResetTokenValidator = [
+  query('token')
+    .trim().notEmpty().withMessage('Reset token is required'),
+];
+
+const resetPasswordValidator = [
+  body('token')
+    .trim().notEmpty().withMessage('Reset token is required'),
+  body('newPassword')
+    .isLength({ min: 8 }).withMessage('New password must be at least 8 characters')
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])/)
+    .withMessage('New password must contain uppercase, lowercase, number, and special character (@$!%*?&)'),
+];
+
 // ─── Users ─────────────────────────────────────────────────────
 
 const updateUserValidator = [
@@ -114,6 +134,9 @@ module.exports = {
   loginValidator,
   refreshTokenValidator,
   changePasswordValidator,
+  forgotPasswordValidator,
+  verifyResetTokenValidator,
+  resetPasswordValidator,
   updateUserValidator,
   updateRoleValidator,
   paginationValidator,

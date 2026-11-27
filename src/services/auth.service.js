@@ -1,12 +1,20 @@
 'use strict';
 
+const crypto            = require('crypto');
 const { Op }           = require('sequelize');
 const { db }           = require('../database/client');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken, getRefreshTokenExpiry, getAccessTokenExpiry, parseDurationMs } = require('../utils/jwt');
 const { writeAuditLog } = require('../utils/auditLog');
+const { sendPasswordResetEmail } = require('../utils/mailer');
 const { TOKEN_TYPES, HTTP_STATUS, AUDIT_CATEGORY, AUDIT_ACTION } = require('../constants');
 const userCache         = require('../utils/userCache');
 const logger            = require('../utils/logger');
+
+const PASSWORD_RESET_EXPIRES_MINUTES = parseInt(process.env.PASSWORD_RESET_EXPIRES_MINUTES || '15', 10);
+
+function hashResetToken(rawToken) {
+  return crypto.createHash('sha256').update(rawToken).digest('hex');
+}
 
 const INCLUDE_ROLE = { model: db.RoleDefinition, as: 'role', attributes: ['id', 'name', 'displayName', 'accessLevel'] };
 
@@ -347,4 +355,164 @@ async function getMe(userId) {
   return userJson;
 }
 
-module.exports = { register, login, refreshTokens, logout, logoutAll, changePassword, getMe };
+/**
+ * Forgot password — creates a one-time reset token and emails the reset link
+ */
+async function forgotPassword({ email, req }) {
+  const user = await db.User.findOne({
+    where: { email, deletedAt: null },
+    attributes: ['id', 'email', 'firstName', 'lastName', 'isActive'],
+  });
+
+  // Never leak account existence or status for unauthenticated password reset requests
+  if (!user || !user.isActive) {
+    return;
+  }
+
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const hashedToken = hashResetToken(rawToken);
+  const expiresMinutes = Number.isFinite(PASSWORD_RESET_EXPIRES_MINUTES) && PASSWORD_RESET_EXPIRES_MINUTES > 0
+    ? PASSWORD_RESET_EXPIRES_MINUTES
+    : 15;
+  const expiresAt = new Date(Date.now() + expiresMinutes * 60 * 1000);
+
+  // Invalidate any previous unused reset tokens for this user
+  await db.Token.update(
+    { isRevoked: true },
+    { where: { userId: user.id, type: TOKEN_TYPES.PASSWORD_RESET, isRevoked: false } }
+  );
+
+  const createdToken = await db.Token.create({
+    userId: user.id,
+    token: hashedToken,
+    type: TOKEN_TYPES.PASSWORD_RESET,
+    expiresAt,
+    deviceInfo: req?.headers['user-agent'],
+    ipAddress: req?.headers['x-forwarded-for'] || req?.socket?.remoteAddress,
+  });
+
+  const frontendBaseUrl = (process.env.FRONTEND_URL || 'http://localhost:3001').replace(/\/+$/, '');
+  const resetUrl = `${frontendBaseUrl}/reset-password?token=${encodeURIComponent(rawToken)}`;
+
+  try {
+    await sendPasswordResetEmail({
+      to: user.email,
+      firstName: user.firstName,
+      resetUrl,
+      expiresMinutes,
+    });
+  } catch (mailError) {
+    await createdToken.update({ isRevoked: true });
+    const err = new Error('Failed to send password reset email. Please try again later.');
+    err.statusCode = HTTP_STATUS.INTERNAL_SERVER_ERROR;
+    err.cause = mailError;
+    throw err;
+  }
+
+  const userName = `${user.firstName} ${user.lastName}`.trim();
+  await writeAuditLog({
+    performedById: user.id,
+    performedByName: userName,
+    action: AUDIT_ACTION.PASSWORD_RESET_REQUESTED,
+    category: AUDIT_CATEGORY.AUTH,
+    entity: 'User',
+    entityId: user.id,
+    entityName: userName,
+    description: `Password reset requested for "${user.email}"`,
+    req,
+  });
+}
+
+async function findValidResetToken(rawToken) {
+  const hashedToken = hashResetToken(rawToken);
+  const storedToken = await db.Token.findOne({
+    where: { token: hashedToken },
+    include: [{
+      model: db.User,
+      as: 'user',
+      attributes: ['id', 'email', 'password', 'firstName', 'lastName', 'isActive', 'deletedAt'],
+    }],
+  });
+
+  if (
+    !storedToken ||
+    storedToken.type !== TOKEN_TYPES.PASSWORD_RESET ||
+    storedToken.isRevoked ||
+    new Date(storedToken.expiresAt) < new Date() ||
+    !storedToken.user ||
+    storedToken.user.deletedAt ||
+    !storedToken.user.isActive
+  ) {
+    const err = new Error('Invalid or expired password reset link');
+    err.statusCode = HTTP_STATUS.BAD_REQUEST;
+    throw err;
+  }
+
+  return storedToken;
+}
+
+/**
+ * Verify password reset token validity before showing reset form
+ */
+async function verifyResetToken({ token }) {
+  const storedToken = await findValidResetToken(token);
+  return { valid: true, email: storedToken.user.email };
+}
+
+/**
+ * Reset password using one-time reset token and revoke active sessions
+ */
+async function resetPassword({ token, newPassword, req }) {
+  const storedToken = await findValidResetToken(token);
+  const { user } = storedToken;
+
+  const isSamePassword = await user.comparePassword(newPassword);
+  if (isSamePassword) {
+    const err = new Error('New password must be different from your current password');
+    err.statusCode = HTTP_STATUS.BAD_REQUEST;
+    throw err;
+  }
+
+  await db.sequelize.transaction(async (t) => {
+    // User model beforeUpdate hook hashes the password automatically
+    await user.update({ password: newPassword }, { transaction: t });
+
+    await db.Token.update(
+      { isRevoked: true },
+      { where: { userId: user.id, type: TOKEN_TYPES.PASSWORD_RESET, isRevoked: false }, transaction: t }
+    );
+
+    await db.Token.update(
+      { isRevoked: true },
+      { where: { userId: user.id, type: TOKEN_TYPES.REFRESH, isRevoked: false }, transaction: t }
+    );
+  });
+
+  userCache.invalidateUser(user.id);
+
+  const userName = `${user.firstName} ${user.lastName}`.trim();
+  await writeAuditLog({
+    performedById: user.id,
+    performedByName: userName,
+    action: AUDIT_ACTION.PASSWORD_RESET_COMPLETED,
+    category: AUDIT_CATEGORY.AUTH,
+    entity: 'User',
+    entityId: user.id,
+    entityName: userName,
+    description: `Password reset completed for "${userName}" — all sessions invalidated`,
+    req,
+  });
+}
+
+module.exports = {
+  register,
+  login,
+  refreshTokens,
+  logout,
+  logoutAll,
+  changePassword,
+  getMe,
+  forgotPassword,
+  verifyResetToken,
+  resetPassword,
+};
