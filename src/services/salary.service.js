@@ -518,18 +518,56 @@ async function createPayrollManually({ requestingUser, data, req }) {
 
 // ── Cron: Auto-generate payroll entries ────────────────────────────────────────
 
+function getIstDateParts(baseDate = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(baseDate);
+  const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  const year = parseInt(map.year, 10);
+  const monthNum = parseInt(map.month, 10);
+  const day = parseInt(map.day, 10);
+  return {
+    year,
+    monthNum,
+    day,
+    daysInMonth: new Date(year, monthNum, 0).getDate(),
+    month: `${map.year}-${map.month}`,
+    todayStr: `${map.year}-${map.month}-${map.day}`,
+  };
+}
+
 async function generatePayrollForDay(dayOfMonth, systemUserId) {
-  const month = currentMonth();
+  const ist = getIstDateParts();
+  const resolvedDay = parseInt(dayOfMonth, 10) || ist.day;
+  const month = ist.month;
+  const todayStr = ist.todayStr;
+  const isLastDayOfMonth = resolvedDay === ist.daysInMonth && ist.daysInMonth < 31;
+  const salaryDayCond = isLastDayOfMonth ? { [Op.gte]: resolvedDay } : resolvedDay;
+
   const generated = [];
   const skipped   = [];
 
-  // Find all active salary configs with salaryDay matching today
+  // Find all active salary configs for active employees whose salaryDay matches today
   const configs = await db.EmployeeSalary.findAll({
-    where: { isActive: true, deletedAt: null, salaryDay: dayOfMonth },
-    include: [{ model: db.User, as: 'employee', attributes: USER_ATTRS }],
+    where: { isActive: true, deletedAt: null, salaryDay: salaryDayCond },
+    include: [{
+      model: db.User,
+      as: 'employee',
+      attributes: USER_ATTRS,
+      where: { isActive: true, deletedAt: null },
+      required: true,
+    }],
   });
 
   for (const cfg of configs) {
+    if (cfg.effectiveFrom && cfg.effectiveFrom > todayStr) {
+      skipped.push({ employeeId: cfg.userId, reason: `Effective from ${cfg.effectiveFrom}` });
+      continue;
+    }
+
     // Skip if a payroll entry already exists for this employee/month
     const exists = await db.EmployeePayroll.findOne({
       where: { employeeId: cfg.userId, payrollMonth: month, deletedAt: null },
@@ -547,18 +585,34 @@ async function generatePayrollForDay(dayOfMonth, systemUserId) {
     try {
       const summary = await attendanceSvc.getMonthlySummary(cfg.userId, month);
       const workingDays = summary.workingDays;
-      const attendedDays = summary.presentDays;
-      const absentDays = summary.absentDays;
+      const hasAttendanceData = (summary.records && summary.records.length > 0) || (summary.paidLeaveDays || 0) > 0;
 
-      if (workingDays > 0) {
+      if (!hasAttendanceData) {
+        // Avoid deducting 100% of salary when no attendance records exist yet (e.g., on the 1st of the month)
+        autoNotes = `Auto-generated DRAFT on salary day (${todayStr}) — no attendance entries recorded yet for ${month}; review before approval.`;
+      } else if (workingDays > 0) {
+        // Count only elapsed working days up to today so future days in the month aren't treated as absent
+        const holidayDates = new Set((summary.holidays || []).map(h => h.date));
+        let elapsedWorkingDays = 0;
+        const maxDay = Math.min(ist.day, ist.daysInMonth);
+        for (let d = 1; d <= maxDay; d++) {
+          const dStr = `${month}-${String(d).padStart(2, '0')}`;
+          const dow = new Date(ist.year, ist.monthNum - 1, d).getDay();
+          if (dow !== 0 && !holidayDates.has(dStr)) {
+            elapsedWorkingDays++;
+          }
+        }
+
+        const attendedDays = summary.presentDays;
+        const absentDays = Math.max(0, parseFloat((elapsedWorkingDays - attendedDays).toFixed(2)));
         const dailyRate = parseFloat(cfg.baseSalary) / workingDays;
         const leaveDed = parseFloat((dailyRate * absentDays).toFixed(2));
         const hourlyRate = parseFloat(cfg.baseSalary) / (workingDays * 8);
         const overtimeInc = parseFloat((hourlyRate * 1.5 * (summary.overtimeHrs || 0)).toFixed(2));
 
-        ded = leaveDed;
+        ded = Math.min(parseFloat(cfg.baseSalary), leaveDed);
         inc = overtimeInc;
-        autoNotes = `Auto: ${workingDays} work days (${summary.totalDays} total - ${summary.sundaysCount} Sundays - ${summary.holidaysCount} Holidays). Attended: ${attendedDays}d, Absent: ${absentDays}d (Rate: ₹${dailyRate.toFixed(2)}/day) → ₹${leaveDed} ded. Overtime: ${summary.overtimeHrs || 0}h → ₹${overtimeInc} inc.`;
+        autoNotes = `Auto: ${workingDays} work days (${elapsedWorkingDays} elapsed). Attended: ${attendedDays}d, Absent: ${absentDays}d (Rate: ₹${dailyRate.toFixed(2)}/day) → ₹${ded} ded. Overtime: ${summary.overtimeHrs || 0}h → ₹${overtimeInc} inc.`;
       }
     } catch (e) {
       console.warn('[salary.service] Cron attendance auto-calc failed:', e.message);
@@ -574,7 +628,7 @@ async function generatePayrollForDay(dayOfMonth, systemUserId) {
       deductionAmount: ded,
       netSalary:      net,
       payrollMonth:   month,
-      salaryDate:     new Date(),
+      salaryDate:     todayStr,
       status:         'DRAFT',
       currency:       cfg.currency,
       notes:          autoNotes || null,

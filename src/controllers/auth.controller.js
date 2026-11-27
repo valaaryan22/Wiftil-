@@ -71,6 +71,43 @@ async function changePassword(req, res, next) {
   }
 }
 
+async function forgotPassword(req, res, next) {
+  try {
+    const { email } = req.body;
+    await authService.forgotPassword({ email, req });
+    return successResponse(res, {
+      message: 'If an account with that email exists, a password reset link has been sent.',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function verifyResetToken(req, res, next) {
+  try {
+    const { token } = req.query;
+    const result = await authService.verifyResetToken({ token });
+    return successResponse(res, {
+      message: 'Reset token is valid',
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function resetPassword(req, res, next) {
+  try {
+    const { token, newPassword } = req.body;
+    await authService.resetPassword({ token, newPassword, req });
+    return successResponse(res, {
+      message: 'Password has been reset successfully. Please login with your new password.',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function me(req, res, next) {
   try {
     const freshUser = await authService.getMe(req.user.id);
@@ -83,4 +120,15 @@ async function me(req, res, next) {
   }
 }
 
-module.exports = { register, login, refreshToken, logout, logoutAll, changePassword, me };
+module.exports = {
+  register,
+  login,
+  refreshToken,
+  logout,
+  logoutAll,
+  changePassword,
+  forgotPassword,
+  verifyResetToken,
+  resetPassword,
+  me,
+};
