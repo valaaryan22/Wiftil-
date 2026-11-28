@@ -77,6 +77,17 @@ if (process.env.NODE_ENV !== 'test') {
 // app.use(globalRateLimiter);
 
 // ─────────────────────────────────────────────
+// Root Health Check (for hosting platforms / GoDaddy preview checks)
+// ─────────────────────────────────────────────
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Wiftil API is running',
+    health: '/api/v1/health',
+  });
+});
+
+// ─────────────────────────────────────────────
 // API Routes
 // ─────────────────────────────────────────────
 app.use('/api/v1', apiRouter);

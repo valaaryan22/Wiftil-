@@ -50,6 +50,8 @@ const holidayRoutes        = require('./holiday.routes');
 const officeLocationRoutes = require('./officeLocation.routes');
 // Task Chains / Predefined Sub-Task Templates module
 const taskChainRoutes      = require('./taskChain.routes');
+// Setup / DB Sync & Seed module
+const setupRoutes          = require('./setup.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -134,5 +136,8 @@ router.use('/holidays',           holidayRoutes);
 
 // ── HRM — Office Locations & Geofence ─────────────────────────────────────────
 router.use('/office-locations',   officeLocationRoutes);
+
+// ── Setup / DB Sync & Seed ────────────────────────────────────────────────────
+router.use('/setup',              setupRoutes);
 
 module.exports = router;
