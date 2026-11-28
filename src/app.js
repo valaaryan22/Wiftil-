@@ -15,6 +15,9 @@ const logger = require('./utils/logger');
 
 const app = express();
 
+// Trust first proxy (GoDaddy / Vercel / reverse proxy) so X-Forwarded-For works with express-rate-limit
+app.set('trust proxy', 1);
+
 // ─────────────────────────────────────────────
 // Response-Time Header (visible in Postman / DevTools)
 // ─────────────────────────────────────────────
